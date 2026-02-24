@@ -261,6 +261,16 @@ async function runAgent(
       }
     : undefined;
 
+  // Build host MCP server URLs for the container
+  const hostMcpServers: Record<string, { url: string }> = {};
+  if (mcpProxy) {
+    for (const name of mcpProxy.getServerNames()) {
+      hostMcpServers[name] = {
+        url: `http://host.docker.internal:${MCP_PROXY_PORT}/mcp/${name}`,
+      };
+    }
+  }
+
   try {
     const output = await runContainerAgent(
       group,
@@ -270,6 +280,7 @@ async function runAgent(
         groupFolder: group.folder,
         chatJid,
         isMain,
+        hostMcpServers: Object.keys(hostMcpServers).length > 0 ? hostMcpServers : undefined,
       },
       (proc, containerName) => queue.registerProcess(chatJid, proc, containerName, group.folder),
       wrappedOnOutput,

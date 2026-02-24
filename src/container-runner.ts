@@ -35,6 +35,7 @@ export interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   secrets?: Record<string, string>;
+  hostMcpServers?: Record<string, { url: string }>;
 }
 
 export interface ContainerOutput {
@@ -108,6 +109,7 @@ function buildVolumeMounts(
   const settingsFile = path.join(groupSessionsDir, 'settings.json');
   if (!fs.existsSync(settingsFile)) {
     fs.writeFileSync(settingsFile, JSON.stringify({
+      language: 'zh-CN',
       env: {
         // Enable agent swarms (subagent orchestration)
         // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
@@ -201,6 +203,9 @@ function buildContainerArgs(mounts: VolumeMount[], containerName: string): strin
     args.push('--user', `${hostUid}:${hostGid}`);
     args.push('-e', 'HOME=/home/node');
   }
+
+  // Allow container to reach host MCP proxy via host.docker.internal
+  args.push('--add-host=host.docker.internal:host-gateway');
 
   for (const mount of mounts) {
     if (mount.readonly) {
