@@ -28,6 +28,7 @@ interface ContainerInput {
   isScheduledTask?: boolean;
   assistantName?: string;
   secrets?: Record<string, string>;
+  hostMcpServers?: Record<string, { url: string }>;
 }
 
 interface ContainerOutput {
@@ -432,7 +433,11 @@ async function runQuery(
         'TeamCreate', 'TeamDelete', 'SendMessage',
         'TodoWrite', 'ToolSearch', 'Skill',
         'NotebookEdit',
-        'mcp__nanoclaw__*'
+        'mcp__nanoclaw__*',
+        // Allow all tools from host MCP servers
+        ...Object.keys(containerInput.hostMcpServers || {}).map(
+          (name) => `mcp__${name}__*`,
+        ),
       ],
       env: sdkEnv,
       permissionMode: 'bypassPermissions',
@@ -448,6 +453,12 @@ async function runQuery(
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
           },
         },
+        // Proxy host MCP servers via HTTP
+        ...Object.fromEntries(
+          Object.entries(containerInput.hostMcpServers || {}).map(
+            ([name, config]) => [name, { type: 'http' as const, url: config.url }],
+          ),
+        ),
       },
       hooks: {
         PreCompact: [{ hooks: [createPreCompactHook(containerInput.assistantName)] }],
