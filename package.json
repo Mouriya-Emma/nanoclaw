@@ -17,6 +17,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@mariozechner/pi-ai": "^0.55.0",
     "@modelcontextprotocol/sdk": "^1.27.0",
     "@whiskeysockets/baileys": "^7.0.0-rc.9",
     "better-sqlite3": "^11.8.1",
