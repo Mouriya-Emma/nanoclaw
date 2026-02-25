@@ -72,6 +72,16 @@ export interface ScheduledTask {
   created_at: string;
 }
 
+export interface ToolRequirement {
+  id: number;
+  group_folder: string;
+  tool_name: string;
+  reason: string | null;
+  needs_auth: number;
+  auth_provider: string | null;
+  created_at: string;
+}
+
 export interface TaskRunLog {
   task_id: string;
   run_at: string;

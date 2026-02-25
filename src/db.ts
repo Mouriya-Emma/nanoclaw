@@ -5,7 +5,7 @@ import path from 'path';
 import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
-import { ModelPreference, NewMessage, RegisteredGroup, ScheduledTask, TaskRunLog } from './types.js';
+import { ModelPreference, NewMessage, RegisteredGroup, ScheduledTask, TaskRunLog, ToolRequirement } from './types.js';
 
 let db: Database.Database;
 
@@ -81,6 +81,16 @@ function createSchema(database: Database.Database): void {
       group_folder TEXT PRIMARY KEY,
       provider TEXT NOT NULL DEFAULT 'claude',
       model_id TEXT
+    );
+    CREATE TABLE IF NOT EXISTS tool_requirements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      group_folder TEXT NOT NULL,
+      tool_name TEXT NOT NULL,
+      reason TEXT,
+      needs_auth INTEGER DEFAULT 0,
+      auth_provider TEXT,
+      created_at TEXT NOT NULL,
+      UNIQUE(group_folder, tool_name)
     );
   `);
 
@@ -628,6 +638,43 @@ export function getAllRegisteredGroups(): Record<string, RegisteredGroup> {
     };
   }
   return result;
+}
+
+// --- Tool requirement accessors ---
+
+export function upsertToolRequirement(req: {
+  group_folder: string;
+  tool_name: string;
+  reason?: string;
+  needs_auth?: boolean;
+  auth_provider?: string;
+}): void {
+  db.prepare(
+    `INSERT INTO tool_requirements (group_folder, tool_name, reason, needs_auth, auth_provider, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(group_folder, tool_name) DO UPDATE SET
+       reason = excluded.reason,
+       needs_auth = excluded.needs_auth,
+       auth_provider = excluded.auth_provider`,
+  ).run(
+    req.group_folder,
+    req.tool_name,
+    req.reason || null,
+    req.needs_auth ? 1 : 0,
+    req.auth_provider || null,
+    new Date().toISOString(),
+  );
+}
+
+export function getToolRequirements(groupFolder?: string): ToolRequirement[] {
+  if (groupFolder) {
+    return db
+      .prepare('SELECT * FROM tool_requirements WHERE group_folder = ? ORDER BY created_at DESC')
+      .all(groupFolder) as ToolRequirement[];
+  }
+  return db
+    .prepare('SELECT * FROM tool_requirements ORDER BY created_at DESC')
+    .all() as ToolRequirement[];
 }
 
 // --- JSON migration ---
