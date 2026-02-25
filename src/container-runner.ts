@@ -15,6 +15,8 @@ import {
   GROUPS_DIR,
   HOST_EXEC_ALLOWLIST,
   IDLE_TIMEOUT,
+  PI_CONTAINER_IMAGE,
+  PROVIDER_SECRET_KEYS,
   TIMEZONE,
 } from './config.js';
 import { readHostExecAllowlist } from './mcp-proxy.js';
@@ -39,6 +41,8 @@ export interface ContainerInput {
   assistantName?: string;
   secrets?: Record<string, string>;
   hostMcpServers?: Record<string, { url: string }>;
+  provider?: string;    // 'claude' | 'google' | 'openai'
+  modelId?: string;     // 'gemini-2.5-flash' | 'gpt-4o'
 }
 
 export interface ContainerOutput {
@@ -267,11 +271,19 @@ function buildVolumeMounts(
  * Read allowed secrets from .env for passing to the container via stdin.
  * Secrets are never written to disk or mounted as files.
  */
-function readSecrets(): Record<string, string> {
-  return readEnvFile(['CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_API_KEY']);
+function readSecrets(provider?: string): Record<string, string> {
+  const keys = PROVIDER_SECRET_KEYS[provider || 'claude'] || PROVIDER_SECRET_KEYS.claude;
+  return readEnvFile(keys);
 }
 
-function buildContainerArgs(mounts: VolumeMount[], containerName: string): string[] {
+function getContainerImage(provider?: string): string {
+  if (provider && provider !== 'claude') {
+    return PI_CONTAINER_IMAGE;
+  }
+  return CONTAINER_IMAGE;
+}
+
+function buildContainerArgs(mounts: VolumeMount[], containerName: string, image: string): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
   // Pass host timezone so container's local time matches the user's
@@ -301,7 +313,7 @@ function buildContainerArgs(mounts: VolumeMount[], containerName: string): strin
     }
   }
 
-  args.push(CONTAINER_IMAGE);
+  args.push(image);
 
   return args;
 }
@@ -320,7 +332,8 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const image = getContainerImage(input.provider);
+  const containerArgs = buildContainerArgs(mounts, containerName, image);
 
   logger.debug(
     {
@@ -361,7 +374,7 @@ export async function runContainerAgent(
     let stderrTruncated = false;
 
     // Pass secrets via stdin (never written to disk or mounted as files)
-    input.secrets = readSecrets();
+    input.secrets = readSecrets(input.provider);
     container.stdin.write(JSON.stringify(input));
     container.stdin.end();
     // Remove secrets from input so they don't appear in logs
