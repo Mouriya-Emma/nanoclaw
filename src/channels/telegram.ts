@@ -1,5 +1,11 @@
 import { Bot } from 'grammy';
 
+import {
+  getAuthStatus,
+  isValidProvider,
+  revokeAuth,
+  startOAuthFlow,
+} from '../auth-manager.js';
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { getToolRequirements } from '../db.js';
 import { logger } from '../logger.js';
@@ -62,6 +68,8 @@ export class TelegramChannel implements Channel {
   private bot: Bot | null = null;
   private opts: TelegramChannelOpts;
   private botToken: string;
+  /** Pending OAuth code input resolvers keyed by chat ID */
+  private pendingAuthResolve = new Map<number, (code: string) => void>();
 
   constructor(botToken: string, opts: TelegramChannelOpts) {
     this.botToken = botToken;
@@ -208,15 +216,59 @@ export class TelegramChannel implements Channel {
       this.reactSeen(ctx.chat.id, ctx.message!.message_id);
     });
 
-    // Auth stub for provider API key setup
-    this.bot.command('auth', (ctx) => {
+    // OAuth authentication
+    this.bot.command('auth', async (ctx) => {
       const args = ctx.match?.trim();
+
       if (!args) {
-        ctx.reply('Usage: /auth <provider> <api_key>\nProviders: google, openai\n\nNote: Full OAuth flow coming soon. For now, set keys in .env file.');
+        const status = getAuthStatus();
+        const lines = status.map(s => `${s.authenticated ? '✅' : '❌'} ${s.provider}`);
+        ctx.reply(`OAuth status:\n${lines.join('\n')}\n\nUsage:\n/auth <provider> — start OAuth\n/auth revoke <provider> — remove credentials`);
         return;
       }
 
-      ctx.reply(`To set up ${args} authentication, add the API key to your .env file:\n\nFor Google: GOOGLE_API_KEY=...\nFor OpenAI: OPENAI_API_KEY=...\n\nThen restart NanoClaw.`);
+      if (args.startsWith('revoke ')) {
+        const provider = args.slice(7).trim();
+        const revoked = revokeAuth(provider);
+        ctx.reply(revoked ? `Credentials for ${provider} revoked.` : `No credentials found for ${provider}.`);
+        return;
+      }
+
+      const provider = args;
+      if (!isValidProvider(provider)) {
+        const status = getAuthStatus();
+        ctx.reply(`Unknown provider: ${provider}\nValid: ${status.map(s => s.provider).join(', ')}`);
+        return;
+      }
+
+      const chatId = ctx.chat.id;
+      if (this.pendingAuthResolve.has(chatId)) {
+        ctx.reply('An OAuth flow is already in progress for this chat. Paste the code or wait for it to complete.');
+        return;
+      }
+
+      ctx.reply(`Starting OAuth for ${provider}...`);
+
+      try {
+        await startOAuthFlow(provider, {
+          onUrl: (url, instructions) => {
+            const msg = instructions
+              ? `${instructions}\n\n${url}\n\nPaste the code/URL you receive back here.`
+              : `Open this URL to authenticate:\n${url}\n\nPaste the code/URL you receive back here.`;
+            ctx.reply(msg);
+          },
+          onMessage: (msg) => ctx.reply(msg),
+          onPromptCode: () => new Promise<string>((resolve) => {
+            this.pendingAuthResolve.set(chatId, resolve);
+          }),
+        });
+
+        ctx.reply(`✅ ${provider} authenticated successfully.`);
+      } catch (err) {
+        ctx.reply(`❌ OAuth failed: ${err instanceof Error ? err.message : String(err)}`);
+      } finally {
+        this.pendingAuthResolve.delete(chatId);
+      }
     });
 
     this.bot.command('requirements', async (ctx) => {
@@ -237,6 +289,14 @@ export class TelegramChannel implements Channel {
     this.bot.on('message:text', async (ctx) => {
       // Skip commands
       if (ctx.message.text.startsWith('/')) return;
+
+      // Intercept messages for pending OAuth code input
+      const pendingResolve = this.pendingAuthResolve.get(ctx.chat.id);
+      if (pendingResolve) {
+        this.pendingAuthResolve.delete(ctx.chat.id);
+        pendingResolve(ctx.message.text.trim());
+        return;
+      }
 
       const chatJid = buildJid({ chat: ctx.chat, message: ctx.message as any });
       let content = ctx.message.text;
