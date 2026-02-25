@@ -5,6 +5,7 @@ import path from 'path';
 import {
   ASSISTANT_NAME,
   DATA_DIR,
+  HOST_EXEC_ALLOWLIST,
   IDLE_TIMEOUT,
   MAIN_GROUP_FOLDER,
   MCP_PROXY_PORT,
@@ -43,7 +44,7 @@ import { findChannel, formatMessages, formatOutbound } from './router.js';
 import { startSchedulerLoop } from './task-scheduler.js';
 import { Channel, NewMessage, RegisteredGroup } from './types.js';
 import { logger } from './logger.js';
-import { McpProxyServer, readHostMcpServers } from './mcp-proxy.js';
+import { McpProxyServer, readHostExecAllowlist, readHostMcpServers } from './mcp-proxy.js';
 
 // Re-export for backwards compatibility during refactor
 export { escapeXml, formatMessages } from './router.js';
@@ -419,9 +420,10 @@ async function main(): Promise<void> {
   logger.info('Database initialized');
   loadState();
 
-  // Start MCP proxy to share host MCP servers with container agents
+  // Start MCP proxy to share host MCP servers and exec commands with containers
   const hostMcpConfigs = readHostMcpServers();
-  mcpProxy = new McpProxyServer(hostMcpConfigs);
+  const execAllowlist = readHostExecAllowlist(HOST_EXEC_ALLOWLIST);
+  mcpProxy = new McpProxyServer(hostMcpConfigs, execAllowlist);
   await mcpProxy.start();
 
   // Graceful shutdown handlers

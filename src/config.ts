@@ -10,6 +10,7 @@ const envConfig = readEnvFile([
   'ASSISTANT_HAS_OWN_NUMBER',
   'TELEGRAM_BOT_TOKEN',
   'TELEGRAM_ONLY',
+  'HOST_EXEC_ALLOWLIST',
 ]);
 
 export const ASSISTANT_NAME =
@@ -77,3 +78,7 @@ export const TELEGRAM_ONLY =
 
 // MCP Proxy port for exposing host MCP servers to container agents
 export const MCP_PROXY_PORT = parseInt(process.env.MCP_PROXY_PORT || '18321', 10);
+
+// Host commands that container agents can execute via the exec proxy
+export const HOST_EXEC_ALLOWLIST =
+  process.env.HOST_EXEC_ALLOWLIST || envConfig.HOST_EXEC_ALLOWLIST || '';

@@ -1,3 +1,4 @@
+import { spawn as spawnChild } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import http from 'http';
@@ -59,13 +60,117 @@ interface StdioClientEntry {
 
 export const MCP_PROXY_PORT = parseInt(process.env.MCP_PROXY_PORT || '18321', 10);
 
+/**
+ * Read the host command execution allowlist.
+ * Accepts an explicit value (from config/env reader) or falls back to
+ * process.env.HOST_EXEC_ALLOWLIST.
+ */
+export function readHostExecAllowlist(raw?: string): string[] {
+  const value = raw ?? process.env.HOST_EXEC_ALLOWLIST ?? '';
+  return value
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+const EXEC_TIMEOUT = 120_000;
+const EXEC_MAX_OUTPUT = 1024 * 1024; // 1MB per stream
+
 export class McpProxyServer {
   private configs: Record<string, StdioMcpServerConfig>;
   private clients: Map<string, StdioClientEntry> = new Map();
   private httpServer: http.Server | null = null;
+  private execAllowlist: Set<string>;
 
-  constructor(configs: Record<string, StdioMcpServerConfig>) {
+  constructor(
+    configs: Record<string, StdioMcpServerConfig>,
+    execAllowlist: string[] = [],
+  ) {
     this.configs = configs;
+    this.execAllowlist = new Set(execAllowlist);
+  }
+
+  /** Execute a whitelisted command on the host */
+  private execHostCommand(body: {
+    command: string;
+    args?: string[];
+    stdin?: string;
+  }): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    const { command, args = [], stdin } = body;
+
+    if (!this.execAllowlist.has(command)) {
+      return Promise.resolve({
+        stdout: '',
+        stderr: `host-exec: command not allowed: ${command}`,
+        exitCode: 126,
+      });
+    }
+
+    // Security: resolve the command to an absolute path, refuse relative/path traversal
+    const basename = path.basename(command);
+    if (basename !== command) {
+      return Promise.resolve({
+        stdout: '',
+        stderr: `host-exec: invalid command name: ${command}`,
+        exitCode: 126,
+      });
+    }
+
+    return new Promise((resolve) => {
+      logger.info({ command, args }, 'host-exec: executing');
+
+      const proc = spawnChild(command, args, {
+        stdio: ['pipe', 'pipe', 'pipe'],
+        timeout: EXEC_TIMEOUT,
+        env: process.env,
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let stdoutTrunc = false;
+      let stderrTrunc = false;
+
+      proc.stdout.on('data', (chunk: Buffer) => {
+        if (stdoutTrunc) return;
+        const s = chunk.toString();
+        if (stdout.length + s.length > EXEC_MAX_OUTPUT) {
+          stdout += s.slice(0, EXEC_MAX_OUTPUT - stdout.length);
+          stdoutTrunc = true;
+        } else {
+          stdout += s;
+        }
+      });
+
+      proc.stderr.on('data', (chunk: Buffer) => {
+        if (stderrTrunc) return;
+        const s = chunk.toString();
+        if (stderr.length + s.length > EXEC_MAX_OUTPUT) {
+          stderr += s.slice(0, EXEC_MAX_OUTPUT - stderr.length);
+          stderrTrunc = true;
+        } else {
+          stderr += s;
+        }
+      });
+
+      if (stdin) {
+        proc.stdin.write(stdin);
+      }
+      proc.stdin.end();
+
+      proc.on('close', (code) => {
+        logger.info({ command, exitCode: code }, 'host-exec: completed');
+        resolve({ stdout, stderr, exitCode: code ?? 1 });
+      });
+
+      proc.on('error', (err) => {
+        logger.error({ command, err }, 'host-exec: spawn error');
+        resolve({
+          stdout: '',
+          stderr: `host-exec: ${err.message}`,
+          exitCode: 127,
+        });
+      });
+    });
   }
 
   /** Connect to (or reconnect) a stdio MCP server */
@@ -168,12 +273,35 @@ export class McpProxyServer {
   }
 
   async start(): Promise<void> {
-    if (Object.keys(this.configs).length === 0) {
-      logger.info('No MCP servers to proxy, skipping HTTP server');
+    const hasMcp = Object.keys(this.configs).length > 0;
+    const hasExec = this.execAllowlist.size > 0;
+    if (!hasMcp && !hasExec) {
+      logger.info('No MCP servers or exec commands to proxy, skipping HTTP server');
       return;
     }
 
     this.httpServer = http.createServer(async (req, res) => {
+      // Read request body helper
+      const readBody = async (): Promise<string> => {
+        const chunks: Buffer[] = [];
+        for await (const chunk of req) chunks.push(chunk as Buffer);
+        return Buffer.concat(chunks).toString();
+      };
+
+      // Route: POST /exec — host command execution
+      if (req.url === '/exec' && req.method === 'POST') {
+        try {
+          const body = JSON.parse(await readBody());
+          const result = await this.execHostCommand(body);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(result));
+        } catch {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ stdout: '', stderr: 'Bad request', exitCode: 1 }));
+        }
+        return;
+      }
+
       // Route: POST /mcp/:serverName
       const match = req.url?.match(/^\/mcp\/([^/]+)$/);
       if (!match || req.method !== 'POST') {
@@ -189,17 +317,12 @@ export class McpProxyServer {
         return;
       }
 
-      // Read request body
-      const chunks: Buffer[] = [];
-      for await (const chunk of req) chunks.push(chunk as Buffer);
-      const bodyStr = Buffer.concat(chunks).toString();
-
       try {
-        const body = JSON.parse(bodyStr);
+        const body = JSON.parse(await readBody());
         const response = await this.handleMcpRequest(serverName, body);
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(response));
-      } catch (err) {
+      } catch {
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
           jsonrpc: '2.0',

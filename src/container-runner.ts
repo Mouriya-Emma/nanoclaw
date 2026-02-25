@@ -13,9 +13,11 @@ import {
   CONTAINER_TIMEOUT,
   DATA_DIR,
   GROUPS_DIR,
+  HOST_EXEC_ALLOWLIST,
   IDLE_TIMEOUT,
   TIMEZONE,
 } from './config.js';
+import { readHostExecAllowlist } from './mcp-proxy.js';
 import { readEnvFile } from './env.js';
 import { resolveGroupFolderPath, resolveGroupIpcPath } from './group-folder.js';
 import { logger } from './logger.js';
@@ -223,6 +225,31 @@ function buildVolumeMounts(
     readonly: false,
   });
 
+  // Host command execution stubs: generate wrapper scripts for whitelisted
+  // commands so container agents can run them as normal CLI tools.
+  // Each wrapper calls the proxy.mjs script baked into the image.
+  const hostExecDir = path.join(DATA_DIR, 'sessions', group.folder, 'host-exec');
+  const allowedCommands = readHostExecAllowlist(HOST_EXEC_ALLOWLIST);
+  if (allowedCommands.length > 0) {
+    fs.mkdirSync(hostExecDir, { recursive: true });
+    // Copy the proxy script from the project into the mount dir
+    const proxySrc = path.join(process.cwd(), 'container', 'host-exec.mjs');
+    if (fs.existsSync(proxySrc)) {
+      fs.copyFileSync(proxySrc, path.join(hostExecDir, 'proxy.mjs'));
+    }
+    // Generate a tiny bash wrapper per command
+    for (const cmd of allowedCommands) {
+      const stub = `#!/bin/bash\nexec node /opt/host-exec/proxy.mjs "${cmd}" "$@"\n`;
+      const stubPath = path.join(hostExecDir, cmd);
+      fs.writeFileSync(stubPath, stub, { mode: 0o755 });
+    }
+    mounts.push({
+      hostPath: hostExecDir,
+      containerPath: '/opt/host-exec',
+      readonly: true,
+    });
+  }
+
   // Additional mounts validated against external allowlist (tamper-proof from containers)
   if (group.containerConfig?.additionalMounts) {
     const validatedMounts = validateAdditionalMounts(
@@ -262,6 +289,9 @@ function buildContainerArgs(mounts: VolumeMount[], containerName: string): strin
 
   // Allow container to reach host MCP proxy via host.docker.internal
   args.push('--add-host=host.docker.internal:host-gateway');
+
+  // Prepend host-exec stubs to PATH so agents can call proxied commands directly
+  args.push('-e', 'PATH=/opt/host-exec:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin');
 
   for (const mount of mounts) {
     if (mount.readonly) {
