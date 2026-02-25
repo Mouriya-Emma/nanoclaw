@@ -245,6 +245,32 @@ server.tool(
 );
 
 server.tool(
+  'request_tool',
+  'Declare a tool requirement for the container environment. Use when you discover a CLI tool is needed but requires user authentication or pre-installation. The requirement is recorded for the user to review and act on.',
+  {
+    tool: z.string().describe('Tool/command name (e.g., "gh", "gcloud")'),
+    reason: z.string().describe('Why this tool is needed'),
+    needsAuth: z.boolean().default(false).describe('Whether the tool requires user authentication'),
+    authProvider: z.string().optional().describe('Auth provider if needs auth (e.g., "github", "google")'),
+  },
+  async (args) => {
+    writeIpcFile(TASKS_DIR, {
+      type: 'tool_requirement',
+      tool: args.tool,
+      reason: args.reason,
+      needsAuth: args.needsAuth,
+      authProvider: args.authProvider,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    return {
+      content: [{ type: 'text' as const, text: `Tool requirement "${args.tool}" recorded. The user will be notified.` }],
+    };
+  },
+);
+
+server.tool(
   'register_group',
   `Register a new WhatsApp group so the agent can respond to messages there. Main group only.
 
