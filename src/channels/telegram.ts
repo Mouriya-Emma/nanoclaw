@@ -1,6 +1,7 @@
 import { Bot } from 'grammy';
 
 import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { getToolRequirements } from '../db.js';
 import { logger } from '../logger.js';
 import {
   Channel,
@@ -216,6 +217,21 @@ export class TelegramChannel implements Channel {
       }
 
       ctx.reply(`To set up ${args} authentication, add the API key to your .env file:\n\nFor Google: GOOGLE_API_KEY=...\nFor OpenAI: OPENAI_API_KEY=...\n\nThen restart NanoClaw.`);
+    });
+
+    this.bot.command('requirements', async (ctx) => {
+      const reqs = getToolRequirements();
+      if (reqs.length === 0) {
+        ctx.reply('No tool requirements recorded.');
+        return;
+      }
+
+      const lines = reqs.map(r => {
+        const auth = r.needs_auth ? ` [needs auth: ${r.auth_provider || 'unknown'}]` : '';
+        return `• ${r.tool_name} (${r.group_folder})${auth}\n  ${r.reason || 'No reason given'}`;
+      });
+
+      ctx.reply(`Tool requirements:\n\n${lines.join('\n\n')}`);
     });
 
     this.bot.on('message:text', async (ctx) => {
