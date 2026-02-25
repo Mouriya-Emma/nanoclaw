@@ -4,6 +4,7 @@ import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
 import { logger } from '../logger.js';
 import {
   Channel,
+  ModelPreference,
   OnChatMetadata,
   OnInboundMessage,
   RegisteredGroup,
@@ -16,6 +17,8 @@ export interface TelegramChannelOpts {
   onRegisterGroup?: (jid: string, group: RegisteredGroup) => void;
   onClearSession?: (jid: string) => void;
   onStopContainer?: (jid: string) => void;
+  onSetModel?: (jid: string, provider: string, modelId?: string) => void;
+  onGetModel?: (jid: string) => ModelPreference;
 }
 
 /** Build JID from a Telegram context, including thread_id for forum topics. */
@@ -114,6 +117,105 @@ export class TelegramChannel implements Channel {
       }
       this.opts.onStopContainer?.(jid);
       ctx.reply('Container stopped.');
+    });
+
+    // Switch model provider for this chat
+    this.bot.command('model', (ctx) => {
+      const jid = buildJid({ chat: ctx.chat, message: ctx.message as any });
+      const group = this.opts.registeredGroups()[jid];
+      if (!group) {
+        ctx.reply('This chat is not registered.');
+        return;
+      }
+
+      const args = ctx.match?.trim();
+      if (!args) {
+        const current = this.opts.onGetModel?.(jid) || { provider: 'claude' };
+        ctx.reply(`Current model: ${current.provider}${current.modelId ? ` (${current.modelId})` : ''}\n\nUsage: /model <provider> [model_id]\nProviders: claude, google, openai`);
+        return;
+      }
+
+      const parts = args.split(/\s+/);
+      const provider = parts[0].toLowerCase();
+      const modelId = parts[1] || undefined;
+
+      const validProviders = ['claude', 'google', 'openai'];
+      if (!validProviders.includes(provider)) {
+        ctx.reply(`Unknown provider: ${provider}\nValid: ${validProviders.join(', ')}`);
+        return;
+      }
+
+      this.opts.onSetModel?.(jid, provider, modelId);
+      this.opts.onClearSession?.(jid);
+      ctx.reply(`Model switched to ${provider}${modelId ? ` (${modelId})` : ''}. Session cleared.`);
+    });
+
+    // One-shot query with a specific provider
+    this.bot.command('ask', (ctx) => {
+      const jid = buildJid({ chat: ctx.chat, message: ctx.message as any });
+      const group = this.opts.registeredGroups()[jid];
+      if (!group) {
+        ctx.reply('This chat is not registered.');
+        return;
+      }
+
+      const args = ctx.match?.trim();
+      if (!args) {
+        ctx.reply('Usage: /ask <provider> <message>\nExample: /ask gemini What is the weather?');
+        return;
+      }
+
+      const spaceIdx = args.indexOf(' ');
+      if (spaceIdx === -1) {
+        ctx.reply('Usage: /ask <provider> <message>');
+        return;
+      }
+
+      const providerArg = args.slice(0, spaceIdx).toLowerCase();
+      const message = args.slice(spaceIdx + 1);
+
+      const providerMap: Record<string, string> = {
+        gemini: 'google',
+        gpt: 'openai',
+        codex: 'openai',
+        claude: 'claude',
+        google: 'google',
+        openai: 'openai',
+      };
+
+      const resolvedProvider = providerMap[providerArg];
+      if (!resolvedProvider) {
+        ctx.reply(`Unknown provider: ${providerArg}\nValid: claude, gemini, codex, google, openai`);
+        return;
+      }
+
+      const timestamp = new Date(ctx.message!.date * 1000).toISOString();
+      const senderName = ctx.from?.first_name || ctx.from?.username || 'Unknown';
+      const sender = ctx.from?.id.toString() || '';
+
+      this.opts.onChatMetadata(jid, timestamp);
+      this.opts.onMessage(jid, {
+        id: ctx.message!.message_id.toString(),
+        chat_jid: jid,
+        sender,
+        sender_name: senderName,
+        content: `__ASK_${resolvedProvider.toUpperCase()}__ ${message}`,
+        timestamp,
+        is_from_me: false,
+      });
+
+      this.reactSeen(ctx.chat.id, ctx.message!.message_id);
+    });
+
+    // Auth stub for provider API key setup
+    this.bot.command('auth', (ctx) => {
+      const args = ctx.match?.trim();
+      if (!args) {
+        ctx.reply('Usage: /auth <provider> <api_key>\nProviders: google, openai\n\nNote: Full OAuth flow coming soon. For now, set keys in .env file.');
+        return;
+      }
+
+      ctx.reply(`To set up ${args} authentication, add the API key to your .env file:\n\nFor Google: GOOGLE_API_KEY=...\nFor OpenAI: OPENAI_API_KEY=...\n\nThen restart NanoClaw.`);
     });
 
     this.bot.on('message:text', async (ctx) => {
