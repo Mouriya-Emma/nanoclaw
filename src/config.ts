@@ -11,6 +11,7 @@ const envConfig = readEnvFile([
   'TELEGRAM_BOT_TOKEN',
   'TELEGRAM_ONLY',
   'HOST_EXEC_ALLOWLIST',
+  'PI_CONTAINER_IMAGE',
 ]);
 
 export const ASSISTANT_NAME =
@@ -38,6 +39,15 @@ export const MAIN_GROUP_FOLDER = 'main';
 
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';
+export const PI_CONTAINER_IMAGE =
+  process.env.PI_CONTAINER_IMAGE || envConfig.PI_CONTAINER_IMAGE || 'nanoclaw-pi:latest';
+
+// Provider → env key mapping for secrets
+export const PROVIDER_SECRET_KEYS: Record<string, string[]> = {
+  claude: ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
+  google: ['GOOGLE_API_KEY'],
+  openai: ['OPENAI_API_KEY'],
+};
 export const CONTAINER_TIMEOUT = parseInt(
   process.env.CONTAINER_TIMEOUT || '1800000',
   10,

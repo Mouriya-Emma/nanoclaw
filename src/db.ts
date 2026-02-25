@@ -5,7 +5,7 @@ import path from 'path';
 import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
-import { NewMessage, RegisteredGroup, ScheduledTask, TaskRunLog } from './types.js';
+import { ModelPreference, NewMessage, RegisteredGroup, ScheduledTask, TaskRunLog } from './types.js';
 
 let db: Database.Database;
 
@@ -76,6 +76,11 @@ function createSchema(database: Database.Database): void {
       added_at TEXT NOT NULL,
       container_config TEXT,
       requires_trigger INTEGER DEFAULT 1
+    );
+    CREATE TABLE IF NOT EXISTS model_preferences (
+      group_folder TEXT PRIMARY KEY,
+      provider TEXT NOT NULL DEFAULT 'claude',
+      model_id TEXT
     );
   `);
 
@@ -507,6 +512,27 @@ export function getAllSessions(): Record<string, string> {
     result[row.group_folder] = row.session_id;
   }
   return result;
+}
+
+// --- Model preference accessors ---
+
+export function getModelPreference(groupFolder: string): ModelPreference {
+  const row = db
+    .prepare('SELECT provider, model_id FROM model_preferences WHERE group_folder = ?')
+    .get(groupFolder) as { provider: string; model_id: string | null } | undefined;
+  return row
+    ? { provider: row.provider, modelId: row.model_id || undefined }
+    : { provider: 'claude' };
+}
+
+export function setModelPreference(groupFolder: string, pref: ModelPreference): void {
+  db.prepare(
+    'INSERT OR REPLACE INTO model_preferences (group_folder, provider, model_id) VALUES (?, ?, ?)',
+  ).run(groupFolder, pref.provider, pref.modelId || null);
+}
+
+export function deleteModelPreference(groupFolder: string): void {
+  db.prepare('DELETE FROM model_preferences WHERE group_folder = ?').run(groupFolder);
 }
 
 // --- Registered group accessors ---

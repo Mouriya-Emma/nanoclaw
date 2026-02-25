@@ -3,11 +3,14 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   _initTestDatabase,
   createTask,
+  deleteModelPreference,
   deleteTask,
   getAllChats,
   getMessagesSince,
+  getModelPreference,
   getNewMessages,
   getTaskById,
+  setModelPreference,
   storeChatMetadata,
   storeMessage,
   updateTask,
@@ -323,5 +326,26 @@ describe('task CRUD', () => {
 
     deleteTask('task-3');
     expect(getTaskById('task-3')).toBeUndefined();
+  });
+});
+
+// --- Model preferences ---
+
+describe('model preferences', () => {
+  it('returns claude as default when no preference set', () => {
+    const pref = getModelPreference('test-group');
+    expect(pref).toEqual({ provider: 'claude' });
+  });
+
+  it('stores and retrieves model preference', () => {
+    setModelPreference('test-group', { provider: 'google', modelId: 'gemini-2.5-flash' });
+    const pref = getModelPreference('test-group');
+    expect(pref).toEqual({ provider: 'google', modelId: 'gemini-2.5-flash' });
+  });
+
+  it('deletes model preference', () => {
+    setModelPreference('test-group', { provider: 'openai' });
+    deleteModelPreference('test-group');
+    expect(getModelPreference('test-group')).toEqual({ provider: 'claude' });
   });
 });
