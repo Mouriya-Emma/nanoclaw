@@ -32,6 +32,11 @@ export interface ContainerConfig {
   timeout?: number; // Default: 300000 (5 minutes)
 }
 
+export interface ModelPreference {
+  provider: string;   // 'claude' | 'google' | 'openai'
+  modelId?: string;   // 'gemini-2.5-flash' | 'gpt-4o' | etc.
+}
+
 export interface RegisteredGroup {
   name: string;
   folder: string;
