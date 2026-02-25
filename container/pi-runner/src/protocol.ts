@@ -12,6 +12,7 @@ export interface ContainerInput {
   hostMcpServers?: Record<string, { url: string }>;
   provider?: string;
   modelId?: string;
+  oauthCredentials?: Record<string, unknown>;
 }
 
 export interface ContainerOutput {

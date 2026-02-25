@@ -97,6 +97,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Write OAuth credentials to auth.json for Pi-mono SDK
+  if (containerInput.oauthCredentials && Object.keys(containerInput.oauthCredentials).length > 0) {
+    const authJsonPath = path.join('/workspace/group', 'auth.json');
+    fs.writeFileSync(authJsonPath, JSON.stringify(containerInput.oauthCredentials, null, 2));
+    delete containerInput.oauthCredentials;
+    log('Wrote OAuth credentials to auth.json');
+  }
+
   // Set up API keys in environment for Pi-mono
   const secrets = containerInput.secrets || {};
   for (const [key, value] of Object.entries(secrets)) {

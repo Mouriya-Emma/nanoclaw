@@ -350,6 +350,15 @@ export async function runContainerAgent(
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
+  // Pass OAuth credentials to pi-runner containers
+  if (input.provider && input.provider !== 'claude') {
+    const { readAuthCredentials } = await import('./auth-manager.js');
+    const authCreds = readAuthCredentials();
+    if (Object.keys(authCreds).length > 0) {
+      (input as any).oauthCredentials = authCreds;
+    }
+  }
+
   return new Promise((resolve) => {
     const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -364,10 +373,12 @@ export async function runContainerAgent(
 
     // Pass secrets via stdin (never written to disk or mounted as files)
     input.secrets = readSecrets(input.provider);
+
     container.stdin.write(JSON.stringify(input));
     container.stdin.end();
     // Remove secrets from input so they don't appear in logs
     delete input.secrets;
+    delete (input as any).oauthCredentials;
 
     // Streaming output: parse OUTPUT_START/END marker pairs as they arrive
     let parseBuffer = '';
