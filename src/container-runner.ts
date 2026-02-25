@@ -4,6 +4,7 @@
  */
 import { ChildProcess, exec, spawn } from 'child_process';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import {
@@ -135,6 +136,61 @@ function buildVolumeMounts(
       fs.cpSync(srcDir, dstDir, { recursive: true });
     }
   }
+
+  // Sync host user's skills (from ~/.claude/skills/) so container agents
+  // have the same skills available as the host Claude Code instance.
+  // Resolves symlinks so the actual skill files are copied.
+  const hostClaudeDir = path.join(os.homedir(), '.claude');
+  const hostSkillsDir = path.join(hostClaudeDir, 'skills');
+  if (fs.existsSync(hostSkillsDir)) {
+    for (const entry of fs.readdirSync(hostSkillsDir)) {
+      const srcPath = path.join(hostSkillsDir, entry);
+      const realSrc = fs.realpathSync(srcPath);
+      if (!fs.statSync(realSrc).isDirectory()) continue;
+      const dstDir = path.join(skillsDst, entry);
+      fs.cpSync(realSrc, dstDir, { recursive: true });
+    }
+  }
+
+  // Sync host user's plugins (from ~/.claude/plugins/) so container agents
+  // can use the same plugins. Rewrites installPath entries to match the
+  // container's home directory (/home/node/.claude/).
+  const hostPluginsDir = path.join(hostClaudeDir, 'plugins');
+  const pluginsDst = path.join(groupSessionsDir, 'plugins');
+  if (fs.existsSync(hostPluginsDir)) {
+    // Copy plugin cache (actual plugin files), skipping .git dirs
+    // which contain read-only pack files that cause EACCES on overwrite.
+    const hostCacheDir = path.join(hostPluginsDir, 'cache');
+    if (fs.existsSync(hostCacheDir)) {
+      const dstCacheDir = path.join(pluginsDst, 'cache');
+      fs.cpSync(hostCacheDir, dstCacheDir, {
+        recursive: true,
+        filter: (src) => !src.includes('/.git'),
+      });
+    }
+
+    // Copy and rewrite installed_plugins.json paths for container
+    const installedFile = path.join(hostPluginsDir, 'installed_plugins.json');
+    if (fs.existsSync(installedFile)) {
+      const content = fs.readFileSync(installedFile, 'utf-8');
+      const rewritten = content.replaceAll(
+        hostClaudeDir,
+        '/home/node/.claude',
+      );
+      fs.mkdirSync(pluginsDst, { recursive: true });
+      fs.writeFileSync(path.join(pluginsDst, 'installed_plugins.json'), rewritten);
+    }
+
+    // Copy auxiliary plugin config files
+    for (const configFile of ['blocklist.json', 'known_marketplaces.json']) {
+      const src = path.join(hostPluginsDir, configFile);
+      if (fs.existsSync(src)) {
+        fs.mkdirSync(pluginsDst, { recursive: true });
+        fs.copyFileSync(src, path.join(pluginsDst, configFile));
+      }
+    }
+  }
+
   mounts.push({
     hostPath: groupSessionsDir,
     containerPath: '/home/node/.claude',
@@ -158,7 +214,7 @@ function buildVolumeMounts(
   // groups. Recompiled on container startup via entrypoint.sh.
   const agentRunnerSrc = path.join(projectRoot, 'container', 'agent-runner', 'src');
   const groupAgentRunnerDir = path.join(DATA_DIR, 'sessions', group.folder, 'agent-runner-src');
-  if (!fs.existsSync(groupAgentRunnerDir) && fs.existsSync(agentRunnerSrc)) {
+  if (fs.existsSync(agentRunnerSrc)) {
     fs.cpSync(agentRunnerSrc, groupAgentRunnerDir, { recursive: true });
   }
   mounts.push({
