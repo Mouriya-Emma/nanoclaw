@@ -80,7 +80,7 @@ export class McpProxyServer {
     const transport = new StdioClientTransport({
       command: config.command,
       args: config.args || [],
-      env: config.env ? { ...process.env, ...config.env } as Record<string, string> : undefined,
+      env: { ...process.env, ...config.env } as Record<string, string>,
     });
 
     const client = new Client({ name: `proxy-${name}`, version: '1.0.0' });
@@ -210,7 +210,7 @@ export class McpProxyServer {
     });
 
     await new Promise<void>((resolve, reject) => {
-      this.httpServer!.listen(MCP_PROXY_PORT, '127.0.0.1', () => {
+      this.httpServer!.listen(MCP_PROXY_PORT, '0.0.0.0', () => {
         logger.info(
           { port: MCP_PROXY_PORT, servers: Object.keys(this.configs) },
           'MCP proxy server started',

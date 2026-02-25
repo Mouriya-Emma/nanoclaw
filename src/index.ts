@@ -270,6 +270,7 @@ async function runAgent(
       };
     }
   }
+  logger.info({ hostMcpServerNames: Object.keys(hostMcpServers), hasMcpProxy: !!mcpProxy }, 'Host MCP servers for container');
 
   try {
     const output = await runContainerAgent(
