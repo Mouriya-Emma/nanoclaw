@@ -1,8 +1,7 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { sendAndExpectReply, interTestDelay } from './helpers.js';
-import { getClient, disconnectClient } from './setup.js';
+import { disconnectClient } from './setup.js';
 
-beforeAll(async () => { await getClient(); });
 afterAll(async () => { await disconnectClient(); });
 
 describe('Telegram commands', () => {

@@ -2,11 +2,14 @@ import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/index.js';
 import { readEnvFile } from '../src/env.js';
 
+// Telegram Desktop public API credentials (from open-source repo)
+const API_ID = 2040;
+const API_HASH = 'b18441a1ff607e10a989891a5462e627';
+
 const env = readEnvFile([
-  'E2E_TELEGRAM_API_ID',
-  'E2E_TELEGRAM_API_HASH',
   'E2E_TELEGRAM_SESSION',
-  'E2E_TELEGRAM_CHAT_ID',
+  'E2E_CHAT_ID',
+  'E2E_THREAD_ID',
   'E2E_BOT_USER_ID',
 ]);
 
@@ -17,10 +20,9 @@ function required(key: string): string {
 }
 
 export const E2E_CONFIG = {
-  apiId: () => parseInt(required('E2E_TELEGRAM_API_ID'), 10),
-  apiHash: () => required('E2E_TELEGRAM_API_HASH'),
   session: () => required('E2E_TELEGRAM_SESSION'),
-  chatId: () => BigInt(required('E2E_TELEGRAM_CHAT_ID')),
+  chatId: () => BigInt(required('E2E_CHAT_ID')),
+  threadId: () => Number(required('E2E_THREAD_ID')),
   botUserId: () => BigInt(required('E2E_BOT_USER_ID')),
 };
 
@@ -31,9 +33,9 @@ export async function getClient(): Promise<TelegramClient> {
 
   client = new TelegramClient(
     new StringSession(E2E_CONFIG.session()),
-    E2E_CONFIG.apiId(),
-    E2E_CONFIG.apiHash(),
-    { connectionRetries: 5 },
+    API_ID,
+    API_HASH,
+    { connectionRetries: 5, useWSS: true },
   );
 
   await client.connect();

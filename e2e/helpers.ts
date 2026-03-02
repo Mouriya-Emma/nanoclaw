@@ -4,10 +4,18 @@ import { E2E_CONFIG, getClient } from './setup.js';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Send a text message to the test group. */
+const DEBUG = !!process.env.E2E_DEBUG;
+function log(...args: unknown[]) {
+  if (DEBUG) console.log(`[e2e ${new Date().toISOString()}]`, ...args);
+}
+
+/** Send a text message to the test group topic. */
 export async function send(text: string): Promise<void> {
   const client = await getClient();
-  await client.sendMessage(E2E_CONFIG.chatId(), { message: text });
+  await client.sendMessage(E2E_CONFIG.chatId(), {
+    message: text,
+    replyTo: E2E_CONFIG.threadId(),
+  });
 }
 
 /**
@@ -23,9 +31,20 @@ export async function sendAndExpectReply(
   const chatId = E2E_CONFIG.chatId();
   const botUserId = E2E_CONFIG.botUserId();
 
+  // Debug: listen to ALL new messages in this chat to see what's coming
+  const debugEvent = new NewMessage({ chats: [chatId] });
+  const debugHandler = (evt: NewMessageEvent) => {
+    const from = evt.message.senderId;
+    const txt = (evt.message.text || '').slice(0, 120);
+    log(`[ALL_MSG] from=${from} bot=${from === botUserId} text="${txt}"`);
+  };
+  client.addEventHandler(debugHandler, debugEvent);
+
   return new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => {
+      log(`[TIMEOUT] No matching reply after ${timeout}ms. Sent: "${text}"`);
       client.removeEventHandler(handler, event);
+      client.removeEventHandler(debugHandler, debugEvent);
       reject(new Error(`Timed out waiting for bot reply after ${timeout}ms. Sent: "${text}"`));
     }, timeout);
 
@@ -33,22 +52,32 @@ export async function sendAndExpectReply(
 
     const handler = (evt: NewMessageEvent) => {
       const msg = evt.message.text || '';
+      log(`[BOT_MSG] text="${msg.slice(0, 120)}"`);
       if (opts?.match) {
         const matches =
           typeof opts.match === 'string' ? msg.includes(opts.match) : opts.match.test(msg);
-        if (!matches) return; // keep waiting
+        if (!matches) {
+          log(`[SKIP] match="${opts.match}" not found in reply`);
+          return;
+        }
       }
       clearTimeout(timer);
       client.removeEventHandler(handler, event);
+      client.removeEventHandler(debugHandler, debugEvent);
+      log(`[MATCHED] reply="${msg.slice(0, 120)}"`);
       resolve(msg);
     };
 
     client.addEventHandler(handler, event);
 
-    // Send the message after handler is attached
-    client.sendMessage(chatId, { message: text }).catch((err) => {
+    log(`[SEND] "${text}" to chat=${chatId} thread=${E2E_CONFIG.threadId()}`);
+    client.sendMessage(chatId, {
+      message: text,
+      replyTo: E2E_CONFIG.threadId(),
+    }).catch((err) => {
       clearTimeout(timer);
       client.removeEventHandler(handler, event);
+      client.removeEventHandler(debugHandler, debugEvent);
       reject(err);
     });
   });
@@ -76,7 +105,10 @@ export async function sendAndExpectNoReply(
   };
 
   client.addEventHandler(handler, event);
-  await client.sendMessage(chatId, { message: text });
+  await client.sendMessage(chatId, {
+    message: text,
+    replyTo: E2E_CONFIG.threadId(),
+  });
   await sleep(wait);
   client.removeEventHandler(handler, event);
 
@@ -87,7 +119,6 @@ export async function sendAndExpectNoReply(
 
 /**
  * Wait for the next bot reply (without sending a message).
- * Use after a command that triggers a delayed or follow-up response.
  */
 export async function waitForReply(
   opts?: { timeout?: number; match?: string | RegExp },
