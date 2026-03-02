@@ -14,7 +14,9 @@
     "format:check": "prettier --check \"src/**/*.ts\"",
     "setup": "tsx setup/index.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "vitest run --config e2e/vitest.config.ts",
+    "e2e:auth": "tsx e2e/auth.ts"
   },
   "dependencies": {
     "@mariozechner/pi-ai": "^0.55.0",
@@ -36,6 +38,7 @@
     "@types/qrcode-terminal": "^0.12.2",
     "@vitest/coverage-v8": "^4.0.18",
     "prettier": "^3.8.1",
+    "telegram": "^2.26.22",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^4.0.18"
