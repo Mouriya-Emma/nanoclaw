@@ -13,10 +13,10 @@ const TRIGGER = `@${process.env.ASSISTANT_NAME || env.ASSISTANT_NAME || 'Andy'}`
 // Pi-mono provider with valid OAuth credentials (see data/pi-auth.json)
 const PI_PROVIDER = 'google-antigravity';
 
-// Pi-mono cold start is slow: OAuth token refresh + Google Cloud Code Assist inference.
-// First container spawn takes ~6 minutes; follow-ups via IPC are much faster.
-const PI_COLD_START_TIMEOUT = 420_000; // 7 minutes
-const PI_WARM_TIMEOUT = 300_000; // 5 minutes (IPC follow-up or second cold start)
+// Pi-mono cold start: container compile + OAuth refresh + model inference.
+// With host MCP connected (~59 tools), first call takes ~16s; follow-ups via IPC ~5s.
+const PI_COLD_START_TIMEOUT = 120_000;
+const PI_WARM_TIMEOUT = 60_000;
 
 afterAll(async () => { await disconnectClient(); });
 
@@ -43,12 +43,30 @@ describe('Pi-mono provider', () => {
   }, PI_COLD_START_TIMEOUT + 10_000);
 
   it('follow-up message reuses pi-mono session', async () => {
-    // Send a follow-up to the same container session (IPC piping)
     const reply = await sendAndExpectReply(
       `${TRIGGER} what is 2+2?`,
       { timeout: PI_WARM_TIMEOUT },
     );
     expect(reply.length).toBeGreaterThan(0);
+  }, PI_WARM_TIMEOUT + 10_000);
+
+  it('agent can use bash tool', async () => {
+    // Ask agent to run a command — verifies codingTools.bash works
+    const reply = await sendAndExpectReply(
+      `${TRIGGER} run the command "echo NANOCLAW_TOOL_TEST" and tell me the output`,
+      { timeout: PI_WARM_TIMEOUT },
+    );
+    expect(reply).toContain('NANOCLAW_TOOL_TEST');
+  }, PI_WARM_TIMEOUT + 10_000);
+
+  it('agent can use file read/write tools', async () => {
+    // Ask agent to write and read a file — verifies codingTools.write + read
+    const marker = `test-${Date.now()}`;
+    const reply = await sendAndExpectReply(
+      `${TRIGGER} write the text "${marker}" to /workspace/group/e2e-tool-test.txt, then read it back and tell me the content`,
+      { timeout: PI_WARM_TIMEOUT },
+    );
+    expect(reply).toContain(marker);
   }, PI_WARM_TIMEOUT + 10_000);
 
   it('/ask google-antigravity executes one-shot pi-mono', async () => {
