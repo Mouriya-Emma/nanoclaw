@@ -36,7 +36,7 @@ describe('Message flow', () => {
     await interTestDelay();
 
     const reply = await sendAndExpectReply(
-      `/ask anthropic say hello`,
+      `/ask google-antigravity say hello`,
       { timeout: 180_000 },
     );
     expect(reply.length).toBeGreaterThan(0);

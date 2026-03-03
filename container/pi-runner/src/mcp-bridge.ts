@@ -5,6 +5,13 @@ import { log } from './protocol.js';
 
 import type { ToolDefinition } from '@mariozechner/pi-coding-agent';
 
+/** Strip $schema from tool parameter schemas — some providers (e.g. Google Cloud Code Assist) reject it. */
+function stripSchemaField(schema: any): any {
+  if (!schema || typeof schema !== 'object') return schema;
+  const { $schema, ...rest } = schema;
+  return rest;
+}
+
 export interface McpBridgeConfig {
   mcpServerPath: string;
   chatJid: string;
@@ -88,7 +95,7 @@ export class McpBridge {
       label: fullName,
       description: tool.description || fullName,
       parameters: tool.inputSchema
-        ? Type.Unsafe(tool.inputSchema)
+        ? Type.Unsafe(stripSchemaField(tool.inputSchema))
         : Type.Object({}),
       execute: async (_toolCallId, params, _signal, _onUpdate, _ctx) => {
         try {

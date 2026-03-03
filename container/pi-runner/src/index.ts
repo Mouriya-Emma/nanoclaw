@@ -5,6 +5,7 @@
  */
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import {
@@ -97,12 +98,20 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Write OAuth credentials to auth.json for Pi-mono SDK
+  // Write OAuth credentials to the path pi-coding-agent expects (~/.pi/agent/auth.json)
+  // AuthStorage requires each credential to have type: "oauth" for OAuth token handling.
   if (containerInput.oauthCredentials && Object.keys(containerInput.oauthCredentials).length > 0) {
-    const authJsonPath = path.join('/workspace/group', 'auth.json');
-    fs.writeFileSync(authJsonPath, JSON.stringify(containerInput.oauthCredentials, null, 2));
+    const piAgentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), '.pi', 'agent');
+    fs.mkdirSync(piAgentDir, { recursive: true });
+    const authJsonPath = path.join(piAgentDir, 'auth.json');
+    // Ensure each credential has type: "oauth" so AuthStorage recognizes them
+    const authData: Record<string, any> = {};
+    for (const [provider, cred] of Object.entries(containerInput.oauthCredentials)) {
+      authData[provider] = { type: 'oauth', ...(cred as any) };
+    }
+    fs.writeFileSync(authJsonPath, JSON.stringify(authData, null, 2));
     delete containerInput.oauthCredentials;
-    log('Wrote OAuth credentials to auth.json');
+    log(`Wrote OAuth credentials to ${authJsonPath}`);
   }
 
   // Set up API keys in environment for Pi-mono
