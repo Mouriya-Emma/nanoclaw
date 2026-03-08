@@ -471,6 +471,7 @@ async function runQuery(
         'Skill',
         'NotebookEdit',
         'mcp__nanoclaw__*',
+        'mcp__ollama__*',
         ...(containerInput.hostMcpServers
           ? Object.keys(containerInput.hostMcpServers).map(
               (name) => `mcp__${name}__*`,
@@ -492,13 +493,21 @@ async function runQuery(
             NANOCLAW_SENDER_USER_ID: containerInput.senderUserId || '',
           },
         },
+        ollama: {
+          command: 'node',
+          args: [
+            path.join(path.dirname(mcpServerPath), 'ollama-mcp-stdio.js'),
+          ],
+        },
         // Host MCP servers proxied via HTTP from the host
         ...(containerInput.hostMcpServers
           ? Object.fromEntries(
-              Object.entries(containerInput.hostMcpServers).map(([name, config]) => [
-                name,
-                { type: 'http' as const, url: config.url },
-              ]),
+              Object.entries(containerInput.hostMcpServers).map(
+                ([name, config]) => [
+                  name,
+                  { type: 'http' as const, url: config.url },
+                ],
+              ),
             )
           : {}),
       },
