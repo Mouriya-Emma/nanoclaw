@@ -6,6 +6,32 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 vi.mock('../config.js', () => ({
   ASSISTANT_NAME: 'Andy',
   TRIGGER_PATTERN: /^@Andy\b/i,
+  PI_PROVIDERS: ['anthropic', 'google', 'openai', 'github-copilot', 'google-antigravity'],
+}));
+
+// Mock auth-manager
+const mockGetAuthStatus = vi.fn(() => [
+  { provider: 'anthropic', authenticated: false },
+  { provider: 'openai-codex', authenticated: false },
+  { provider: 'google-gemini-cli', authenticated: false },
+  { provider: 'google-antigravity', authenticated: false },
+  { provider: 'github-copilot', authenticated: false },
+]);
+vi.mock('../auth-manager.js', () => ({
+  getAuthStatus: (...args: any[]) => mockGetAuthStatus(...args),
+  isValidProvider: vi.fn(),
+  revokeAuth: vi.fn(),
+  startOAuthFlow: vi.fn(),
+}));
+
+// Mock db (getLastPiPreference, setLastPiPreference, getToolRequirements)
+const mockGetLastPiPreference = vi.fn<(folder: string) => { provider: string; modelId?: string } | undefined>(() => undefined);
+const mockSetLastPiPreference = vi.fn();
+const mockGetToolRequirements = vi.fn(() => []);
+vi.mock('../db.js', () => ({
+  getLastPiPreference: (folder: string) => mockGetLastPiPreference(folder),
+  setLastPiPreference: (folder: string, provider: string, modelId?: string) => mockSetLastPiPreference(folder, provider, modelId),
+  getToolRequirements: () => mockGetToolRequirements(),
 }));
 
 // Mock logger
@@ -61,6 +87,11 @@ vi.mock('grammy', () => ({
     }
 
     stop() {}
+  },
+  InlineKeyboard: class MockInlineKeyboard {
+    rows: any[] = [];
+    text(_label: string, _data: string) { return this; }
+    row() { return this; }
   },
 }));
 
@@ -939,6 +970,317 @@ describe('TelegramChannel', () => {
       await handler(ctx);
 
       expect(ctx.reply).toHaveBeenCalledWith('Andy is online.');
+    });
+  });
+
+  // --- /pi command ---
+
+  describe('/pi command', () => {
+    function createCommandCtx(args: string) {
+      return {
+        chat: { id: 100200300, type: 'group' as const },
+        from: { id: 99001, first_name: 'Alice' },
+        message: { message_id: 1 } as any,
+        match: args,
+        reply: vi.fn(),
+      };
+    }
+
+    function optsWithModel() {
+      return createTestOpts({
+        onSetModel: vi.fn(),
+        onClearSession: vi.fn(),
+        onGetModel: vi.fn(() => ({ provider: 'claude' })),
+      });
+    }
+
+    it('/pi anthropic switches to pi-mono provider and clears session', async () => {
+      const opts = optsWithModel();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('pi')!;
+      await handler(createCommandCtx('anthropic'));
+
+      expect(opts.onSetModel).toHaveBeenCalledWith('tg:100200300', 'anthropic', undefined);
+      expect(opts.onClearSession).toHaveBeenCalledWith('tg:100200300');
+      expect(mockSetLastPiPreference).toHaveBeenCalledWith('test-group', 'anthropic', undefined);
+    });
+
+    it('/pi google switches to google provider', async () => {
+      const opts = optsWithModel();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('pi')!;
+      await handler(createCommandCtx('google'));
+
+      expect(opts.onSetModel).toHaveBeenCalledWith('tg:100200300', 'google', undefined);
+      expect(opts.onClearSession).toHaveBeenCalled();
+    });
+
+    it('/pi without args shows provider buttons', async () => {
+      mockGetAuthStatus.mockReturnValueOnce([
+        { provider: 'openai', authenticated: true },
+        { provider: 'google', authenticated: true },
+      ]);
+      const opts = optsWithModel();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('pi')!;
+      const ctx = createCommandCtx('');
+      await handler(ctx);
+
+      expect(opts.onSetModel).not.toHaveBeenCalled();
+      expect(ctx.reply).toHaveBeenCalledWith(
+        'Select a pi-mono provider:',
+        expect.objectContaining({ reply_markup: expect.anything() }),
+      );
+    });
+
+    it('/pi without args and no auth shows error', async () => {
+      mockGetLastPiPreference.mockReturnValueOnce(undefined);
+      mockGetAuthStatus.mockReturnValueOnce([
+        { provider: 'anthropic', authenticated: false },
+        { provider: 'openai-codex', authenticated: false },
+        { provider: 'google-gemini-cli', authenticated: false },
+        { provider: 'google-antigravity', authenticated: false },
+        { provider: 'github-copilot', authenticated: false },
+      ]);
+      const opts = optsWithModel();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('pi')!;
+      const ctx = createCommandCtx('');
+      await handler(ctx);
+
+      expect(opts.onSetModel).not.toHaveBeenCalled();
+      expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('No authenticated'));
+    });
+
+    it('/pi invalid rejects unknown provider', async () => {
+      const opts = optsWithModel();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('pi')!;
+      const ctx = createCommandCtx('banana');
+      await handler(ctx);
+
+      expect(opts.onSetModel).not.toHaveBeenCalled();
+      expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('Unknown pi-mono provider'));
+    });
+
+    it('/pi rejects unregistered chat', async () => {
+      const opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({})),
+        onSetModel: vi.fn(),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('pi')!;
+      const ctx = createCommandCtx('anthropic');
+      await handler(ctx);
+
+      expect(ctx.reply).toHaveBeenCalledWith('This chat is not registered.');
+    });
+  });
+
+  // --- /cla command ---
+
+  describe('/cla command', () => {
+    function createCommandCtx() {
+      return {
+        chat: { id: 100200300, type: 'group' as const },
+        from: { id: 99001, first_name: 'Alice' },
+        message: { message_id: 1 } as any,
+        reply: vi.fn(),
+      };
+    }
+
+    it('/cla switches to Claude Agent SDK and clears session', async () => {
+      const opts = createTestOpts({
+        onSetModel: vi.fn(),
+        onClearSession: vi.fn(),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('cla')!;
+      await handler(createCommandCtx());
+
+      expect(opts.onSetModel).toHaveBeenCalledWith('tg:100200300', 'claude');
+      expect(opts.onClearSession).toHaveBeenCalledWith('tg:100200300');
+    });
+
+    it('/cla rejects unregistered chat', async () => {
+      const opts = createTestOpts({
+        registeredGroups: vi.fn(() => ({})),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('cla')!;
+      const ctx = createCommandCtx();
+      await handler(ctx);
+
+      expect(ctx.reply).toHaveBeenCalledWith('This chat is not registered.');
+    });
+  });
+
+  // --- /model command ---
+
+  describe('/model command', () => {
+    function createCommandCtx(args: string) {
+      return {
+        chat: { id: 100200300, type: 'group' as const },
+        from: { id: 99001, first_name: 'Alice' },
+        message: { message_id: 1 } as any,
+        match: args,
+        reply: vi.fn(),
+      };
+    }
+
+    it('/model sets model within current provider', async () => {
+      const opts = createTestOpts({
+        onGetModel: vi.fn(() => ({ provider: 'google' })),
+        onSetModel: vi.fn(),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('model')!;
+      await handler(createCommandCtx('gemini-2.5-flash'));
+
+      expect(opts.onSetModel).toHaveBeenCalledWith('tg:100200300', 'google', 'gemini-2.5-flash');
+    });
+
+    it('/model preserves current provider (does not switch runtime)', async () => {
+      const opts = createTestOpts({
+        onGetModel: vi.fn(() => ({ provider: 'anthropic', modelId: 'old-model' })),
+        onSetModel: vi.fn(),
+        onClearSession: vi.fn(),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('model')!;
+      await handler(createCommandCtx('claude-sonnet-4'));
+
+      expect(opts.onSetModel).toHaveBeenCalledWith('tg:100200300', 'anthropic', 'claude-sonnet-4');
+      // Does NOT clear session
+      expect(opts.onClearSession).not.toHaveBeenCalled();
+    });
+
+    it('/model without args shows current status', async () => {
+      const opts = createTestOpts({
+        onGetModel: vi.fn(() => ({ provider: 'google', modelId: 'gemini-2.5-flash' })),
+        onSetModel: vi.fn(),
+      });
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('model')!;
+      const ctx = createCommandCtx('');
+      await handler(ctx);
+
+      expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('google'));
+      expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('gemini-2.5-flash'));
+      expect(opts.onSetModel).not.toHaveBeenCalled();
+    });
+  });
+
+  // --- /ask extended providers ---
+
+  describe('/ask command with extended providers', () => {
+    function createAskCtx(args: string) {
+      return {
+        chat: { id: 100200300, type: 'group' as const },
+        from: { id: 99001, first_name: 'Alice', username: 'alice_user' },
+        message: { message_id: 1, date: Math.floor(Date.now() / 1000) } as any,
+        match: args,
+        reply: vi.fn(),
+      };
+    }
+
+    it('/ask anthropic routes to anthropic provider', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('ask')!;
+      await handler(createAskCtx('anthropic What is 2+2?'));
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '__ASK_ANTHROPIC__ What is 2+2?',
+        }),
+      );
+    });
+
+    it('/ask copilot maps to github-copilot provider', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('ask')!;
+      await handler(createAskCtx('copilot Help me code'));
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '__ASK_GITHUB-COPILOT__ Help me code',
+        }),
+      );
+    });
+
+    it('/ask gemini still maps to google', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('ask')!;
+      await handler(createAskCtx('gemini Explain quantum'));
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '__ASK_GOOGLE__ Explain quantum',
+        }),
+      );
+    });
+
+    it('/ask github-copilot works with full name', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('ask')!;
+      await handler(createAskCtx('github-copilot Write a function'));
+
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'tg:100200300',
+        expect.objectContaining({
+          content: '__ASK_GITHUB-COPILOT__ Write a function',
+        }),
+      );
+    });
+
+    it('/ask unknown-provider shows error', async () => {
+      const opts = createTestOpts();
+      const channel = new TelegramChannel('test-token', opts);
+      await channel.connect();
+
+      const handler = currentBot().commandHandlers.get('ask')!;
+      const ctx = createAskCtx('banana Hello');
+      await handler(ctx);
+
+      expect(opts.onMessage).not.toHaveBeenCalled();
+      expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('Unknown provider'));
     });
   });
 

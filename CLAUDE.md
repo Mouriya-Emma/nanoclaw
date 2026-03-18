@@ -4,7 +4,7 @@ Personal Claude assistant. See [README.md](README.md) for philosophy and setup. 
 
 ## Quick Context
 
-Single Node.js process that connects to WhatsApp, routes messages to Claude Agent SDK running in containers (Linux VMs). Each group has isolated filesystem and memory.
+Single Node.js process that connects to WhatsApp/Telegram, routes messages to agent containers (Linux VMs). Each group has isolated filesystem and memory. Supports two runtimes: **Claude Agent SDK** (`/cla`) and **pi-mono** (`/pi`) — pi-mono supports multiple backends (anthropic, google, openai, github-copilot, google-antigravity) via OAuth.
 
 ## Key Files
 
@@ -16,11 +16,14 @@ Single Node.js process that connects to WhatsApp, routes messages to Claude Agen
 | `src/router.ts` | Message formatting and outbound routing |
 | `src/config.ts` | Trigger pattern, paths, intervals |
 | `src/container-runner.ts` | Spawns agent containers with mounts |
+| `src/auth-manager.ts` | Pi-mono OAuth credential management |
 | `src/task-scheduler.ts` | Runs scheduled tasks |
 | `src/db.ts` | SQLite operations |
 | `groups/{name}/CLAUDE.md` | Per-group memory (isolated) |
 | `src/mcp-proxy.ts` | MCP proxy + host exec proxy for containers |
 | `container/host-exec.mjs` | Container-side stub for host CLI execution |
+| `container/pi-runner/src/` | Pi-mono container entrypoint + session/MCP bridge |
+| `container/Dockerfile.pi` | Pi-mono container image |
 | `container/skills/agent-browser.md` | Browser automation tool (available to all agents via Bash) |
 
 ## Skills

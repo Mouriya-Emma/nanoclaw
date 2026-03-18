@@ -9,12 +9,22 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 // Mock config
 vi.mock('./config.js', () => ({
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
+  PI_CONTAINER_IMAGE: 'nanoclaw-pi:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
   CONTAINER_TIMEOUT: 1800000, // 30min
   DATA_DIR: '/tmp/nanoclaw-test-data',
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   IDLE_TIMEOUT: 1800000, // 30min
   TIMEZONE: 'America/Los_Angeles',
+  HOST_EXEC_ALLOWLIST: '',
+  PROVIDER_SECRET_KEYS: {
+    claude: ['ANTHROPIC_API_KEY'],
+    google: ['GOOGLE_API_KEY'],
+    openai: ['OPENAI_API_KEY'],
+    anthropic: [],
+    'github-copilot': [],
+    'google-antigravity': [],
+  },
 }));
 
 // Mock logger
@@ -48,6 +58,29 @@ vi.mock('fs', async () => {
 // Mock mount-security
 vi.mock('./mount-security.js', () => ({
   validateAdditionalMounts: vi.fn(() => []),
+}));
+
+// Mock mcp-proxy
+vi.mock('./mcp-proxy.js', () => ({
+  readHostExecAllowlist: vi.fn(() => []),
+}));
+
+// Mock container-runtime
+vi.mock('./container-runtime.js', () => ({
+  CONTAINER_RUNTIME_BIN: 'docker',
+  readonlyMountArgs: vi.fn((host: string, container: string) => ['-v', `${host}:${container}:ro`]),
+  stopContainer: vi.fn((name: string) => `docker stop ${name}`),
+}));
+
+// Mock group-folder
+vi.mock('./group-folder.js', () => ({
+  resolveGroupFolderPath: vi.fn((folder: string) => `/tmp/nanoclaw-test-groups/${folder}`),
+  resolveGroupIpcPath: vi.fn((folder: string) => `/tmp/nanoclaw-test-ipc/${folder}`),
+}));
+
+// Mock env
+vi.mock('./env.js', () => ({
+  readEnvFile: vi.fn(() => ({})),
 }));
 
 // Create a controllable fake ChildProcess

@@ -94,6 +94,24 @@ function createSchema(database: Database.Database): void {
     );
   `);
 
+  // Add last_pi_provider column if it doesn't exist (migration for existing DBs)
+  try {
+    database.exec(
+      `ALTER TABLE model_preferences ADD COLUMN last_pi_provider TEXT`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
+  // Add last_pi_model_id column if it doesn't exist (migration for existing DBs)
+  try {
+    database.exec(
+      `ALTER TABLE model_preferences ADD COLUMN last_pi_model_id TEXT`,
+    );
+  } catch {
+    /* column already exists */
+  }
+
   // Add context_mode column if it doesn't exist (migration for existing DBs)
   try {
     database.exec(
@@ -543,6 +561,40 @@ export function setModelPreference(groupFolder: string, pref: ModelPreference): 
 
 export function deleteModelPreference(groupFolder: string): void {
   db.prepare('DELETE FROM model_preferences WHERE group_folder = ?').run(groupFolder);
+}
+
+export function getLastPiProvider(groupFolder: string): string | undefined {
+  const row = db
+    .prepare('SELECT last_pi_provider FROM model_preferences WHERE group_folder = ?')
+    .get(groupFolder) as { last_pi_provider: string | null } | undefined;
+  return row?.last_pi_provider || undefined;
+}
+
+/** Get the full last pi-mono preference (provider + modelId). */
+export function getLastPiPreference(groupFolder: string): ModelPreference | undefined {
+  const row = db
+    .prepare('SELECT last_pi_provider, last_pi_model_id FROM model_preferences WHERE group_folder = ?')
+    .get(groupFolder) as { last_pi_provider: string | null; last_pi_model_id: string | null } | undefined;
+  if (!row?.last_pi_provider) return undefined;
+  return { provider: row.last_pi_provider, modelId: row.last_pi_model_id || undefined };
+}
+
+export function setLastPiProvider(groupFolder: string, provider: string): void {
+  // Upsert: create row if it doesn't exist, otherwise just update last_pi_provider
+  db.prepare(
+    `INSERT INTO model_preferences (group_folder, provider, last_pi_provider)
+     VALUES (?, 'claude', ?)
+     ON CONFLICT(group_folder) DO UPDATE SET last_pi_provider = ?`,
+  ).run(groupFolder, provider, provider);
+}
+
+/** Save the full pi-mono preference (provider + modelId) for later restoration. */
+export function setLastPiPreference(groupFolder: string, provider: string, modelId?: string): void {
+  db.prepare(
+    `INSERT INTO model_preferences (group_folder, provider, last_pi_provider, last_pi_model_id)
+     VALUES (?, 'claude', ?, ?)
+     ON CONFLICT(group_folder) DO UPDATE SET last_pi_provider = ?, last_pi_model_id = ?`,
+  ).run(groupFolder, provider, modelId || null, provider, modelId || null);
 }
 
 // --- Registered group accessors ---

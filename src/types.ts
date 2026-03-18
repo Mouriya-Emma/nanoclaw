@@ -33,8 +33,8 @@ export interface ContainerConfig {
 }
 
 export interface ModelPreference {
-  provider: string;   // 'claude' | 'google' | 'openai'
-  modelId?: string;   // 'gemini-2.5-flash' | 'gpt-4o' | etc.
+  provider: string;   // 'claude' | 'anthropic' | 'google' | 'openai' | 'github-copilot' | 'google-antigravity'
+  modelId?: string;   // specific model id within the provider
 }
 
 export interface RegisteredGroup {

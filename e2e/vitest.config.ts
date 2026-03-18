@@ -1,5 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
+// Shared base config — prefer using the workspace (vitest.workspace.ts) instead.
 export default defineConfig({
   test: {
     include: ['e2e/**/*.test.ts'],
