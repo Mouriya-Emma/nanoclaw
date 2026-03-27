@@ -11,16 +11,29 @@ describe('readHostMcpServers', () => {
 
   it('reads stdio mcpServers from ~/.claude.json', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readFileSync').mockReturnValue(JSON.stringify({
-      mcpServers: {
-        pencil: { command: '/opt/pencil/mcp', args: ['--app', 'desktop'], env: {} },
-        chrome_devtools: { command: 'npx', args: ['chrome-devtools-mcp@latest'] },
-      },
-    }));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        mcpServers: {
+          pencil: {
+            command: '/opt/pencil/mcp',
+            args: ['--app', 'desktop'],
+            env: {},
+          },
+          chrome_devtools: {
+            command: 'npx',
+            args: ['chrome-devtools-mcp@latest'],
+          },
+        },
+      }),
+    );
 
     const servers = readHostMcpServers();
     expect(servers).toEqual({
-      pencil: { command: '/opt/pencil/mcp', args: ['--app', 'desktop'], env: {} },
+      pencil: {
+        command: '/opt/pencil/mcp',
+        args: ['--app', 'desktop'],
+        env: {},
+      },
       chrome_devtools: { command: 'npx', args: ['chrome-devtools-mcp@latest'] },
     });
   });
@@ -33,12 +46,14 @@ describe('readHostMcpServers', () => {
 
   it('skips non-stdio servers (type: http/sse)', () => {
     vi.spyOn(fs, 'existsSync').mockReturnValue(true);
-    vi.spyOn(fs, 'readFileSync').mockReturnValue(JSON.stringify({
-      mcpServers: {
-        local_tool: { command: 'node', args: ['server.js'] },
-        remote_api: { type: 'http', url: 'https://example.com/mcp' },
-      },
-    }));
+    vi.spyOn(fs, 'readFileSync').mockReturnValue(
+      JSON.stringify({
+        mcpServers: {
+          local_tool: { command: 'node', args: ['server.js'] },
+          remote_api: { type: 'http', url: 'https://example.com/mcp' },
+        },
+      }),
+    );
 
     const servers = readHostMcpServers();
     expect(servers).toEqual({

@@ -45,7 +45,10 @@ export function readHostMcpServers(): Record<string, StdioMcpServerConfig> {
       };
     }
 
-    logger.info({ servers: Object.keys(result) }, 'Read host MCP server configs');
+    logger.info(
+      { servers: Object.keys(result) },
+      'Read host MCP server configs',
+    );
     return result;
   } catch (err) {
     logger.warn({ err }, 'Failed to read ~/.claude.json MCP config');
@@ -58,7 +61,10 @@ interface StdioClientEntry {
   transport: StdioClientTransport;
 }
 
-export const MCP_PROXY_PORT = parseInt(process.env.MCP_PROXY_PORT || '18321', 10);
+export const MCP_PROXY_PORT = parseInt(
+  process.env.MCP_PROXY_PORT || '18321',
+  10,
+);
 
 /**
  * Read the host command execution allowlist.
@@ -193,7 +199,10 @@ export class McpProxyServer {
 
     // Auto-cleanup on close so next request respawns
     transport.onclose = () => {
-      logger.warn({ name }, 'MCP stdio server disconnected, will respawn on next request');
+      logger.warn(
+        { name },
+        'MCP stdio server disconnected, will respawn on next request',
+      );
       this.clients.delete(name);
     };
 
@@ -232,7 +241,9 @@ export class McpProxyServer {
           result = await client.listTools(params as { cursor?: string });
           break;
         case 'tools/call':
-          result = await client.callTool(params as { name: string; arguments?: Record<string, unknown> });
+          result = await client.callTool(
+            params as { name: string; arguments?: Record<string, unknown> },
+          );
           break;
         case 'resources/list':
           result = await client.listResources(params as { cursor?: string });
@@ -241,13 +252,17 @@ export class McpProxyServer {
           result = await client.readResource(params as { uri: string });
           break;
         case 'resources/templates/list':
-          result = await client.listResourceTemplates(params as { cursor?: string });
+          result = await client.listResourceTemplates(
+            params as { cursor?: string },
+          );
           break;
         case 'prompts/list':
           result = await client.listPrompts(params as { cursor?: string });
           break;
         case 'prompts/get':
-          result = await client.getPrompt(params as { name: string; arguments?: Record<string, string> });
+          result = await client.getPrompt(
+            params as { name: string; arguments?: Record<string, string> },
+          );
           break;
         case 'ping':
           result = {};
@@ -267,7 +282,10 @@ export class McpProxyServer {
       return {
         jsonrpc: '2.0',
         id,
-        error: { code: -32603, message: err instanceof Error ? err.message : String(err) },
+        error: {
+          code: -32603,
+          message: err instanceof Error ? err.message : String(err),
+        },
       };
     }
   }
@@ -276,7 +294,9 @@ export class McpProxyServer {
     const hasMcp = Object.keys(this.configs).length > 0;
     const hasExec = this.execAllowlist.size > 0;
     if (!hasMcp && !hasExec) {
-      logger.info('No MCP servers or exec commands to proxy, skipping HTTP server');
+      logger.info(
+        'No MCP servers or exec commands to proxy, skipping HTTP server',
+      );
       return;
     }
 
@@ -297,7 +317,9 @@ export class McpProxyServer {
           res.end(JSON.stringify(result));
         } catch {
           res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ stdout: '', stderr: 'Bad request', exitCode: 1 }));
+          res.end(
+            JSON.stringify({ stdout: '', stderr: 'Bad request', exitCode: 1 }),
+          );
         }
         return;
       }
@@ -324,11 +346,13 @@ export class McpProxyServer {
         res.end(JSON.stringify(response));
       } catch {
         res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-          jsonrpc: '2.0',
-          id: null,
-          error: { code: -32700, message: 'Parse error' },
-        }));
+        res.end(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: null,
+            error: { code: -32700, message: 'Parse error' },
+          }),
+        );
       }
     });
 

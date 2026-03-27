@@ -955,15 +955,15 @@ describe('TelegramChannel', () => {
 
   describe('buildJid', () => {
     it('returns simple JID for regular group', () => {
-      expect(
-        buildJid({ chat: { id: -1001234, type: 'group' } }),
-      ).toBe('tg:-1001234');
+      expect(buildJid({ chat: { id: -1001234, type: 'group' } })).toBe(
+        'tg:-1001234',
+      );
     });
 
     it('returns simple JID for private chat', () => {
-      expect(
-        buildJid({ chat: { id: 99001, type: 'private' } }),
-      ).toBe('tg:99001');
+      expect(buildJid({ chat: { id: 99001, type: 'private' } })).toBe(
+        'tg:99001',
+      );
     });
 
     it('returns JID with thread_id for supergroup forum topic', () => {
@@ -994,9 +994,9 @@ describe('TelegramChannel', () => {
     });
 
     it('returns simple JID when no message provided', () => {
-      expect(
-        buildJid({ chat: { id: -1001234, type: 'supergroup' } }),
-      ).toBe('tg:-1001234');
+      expect(buildJid({ chat: { id: -1001234, type: 'supergroup' } })).toBe(
+        'tg:-1001234',
+      );
     });
   });
 
@@ -1244,7 +1244,11 @@ describe('TelegramChannel', () => {
 
       const handler = currentBot().commandHandlers.get('chatid')!;
       const ctx = {
-        chat: { id: -1001234, type: 'supergroup' as const, title: 'Forum Group' },
+        chat: {
+          id: -1001234,
+          type: 'supergroup' as const,
+          title: 'Forum Group',
+        },
         from: { first_name: 'Alice' },
         message: { message_thread_id: 42, is_topic_message: true },
         reply: vi.fn(),
