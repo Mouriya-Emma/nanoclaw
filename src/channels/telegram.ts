@@ -1,4 +1,4 @@
-import { Bot } from 'grammy';
+import { Bot, InlineKeyboard } from 'grammy';
 
 import {
   getAuthStatus,
@@ -6,7 +6,8 @@ import {
   revokeAuth,
   startOAuthFlow,
 } from '../auth-manager.js';
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { ASSISTANT_NAME, PI_PROVIDERS, TRIGGER_PATTERN } from '../config.js';
+import { getLastPiPreference, setLastPiPreference } from '../db.js';
 import { getToolRequirements } from '../db.js';
 import { logger } from '../logger.js';
 import {
@@ -85,6 +86,31 @@ export class TelegramChannel implements Channel {
     this.opts = opts;
   }
 
+  /**
+   * Resolve a group for a command context.
+   * Falls back to parent group for unregistered forum topics.
+   */
+  private resolveGroup(ctx: any): { jid: string; group: RegisteredGroup } | null {
+    const jid = buildJid({ chat: ctx.chat, message: ctx.message });
+    const groups = this.opts.registeredGroups();
+    const group = groups[jid];
+    if (group) return { jid, group };
+
+    // Try auto-register topic
+    const autoGroup = this.tryAutoRegisterTopic(jid, ctx.message);
+    if (autoGroup) return { jid, group: autoGroup };
+
+    // Fallback: use parent group for forum topics
+    const { chatId, threadId } = parseJid(jid);
+    if (threadId) {
+      const parentJid = `tg:${chatId}`;
+      const parentGroup = groups[parentJid];
+      if (parentGroup) return { jid: parentJid, group: parentGroup };
+    }
+
+    return null;
+  }
+
   async connect(): Promise<void> {
     this.bot = new Bot(this.botToken);
 
@@ -114,73 +140,119 @@ export class TelegramChannel implements Channel {
 
     // Clear session — next message starts a fresh conversation
     this.bot.command('clear', (ctx) => {
-      const jid = buildJid({ chat: ctx.chat, message: ctx.message as any });
-      const group = this.opts.registeredGroups()[jid];
-      if (!group) {
-        ctx.reply('This chat is not registered.');
-        return;
-      }
-      this.opts.onClearSession?.(jid);
+      const resolved = this.resolveGroup(ctx);
+      if (!resolved) { ctx.reply('This chat is not registered.'); return; }
+      this.opts.onClearSession?.(resolved.jid);
       ctx.reply('Session cleared. Next message starts a fresh conversation.');
     });
 
     // Stop active container for this chat
     this.bot.command('stop', (ctx) => {
-      const jid = buildJid({ chat: ctx.chat, message: ctx.message as any });
-      const group = this.opts.registeredGroups()[jid];
-      if (!group) {
-        ctx.reply('This chat is not registered.');
-        return;
-      }
-      this.opts.onStopContainer?.(jid);
+      const resolved = this.resolveGroup(ctx);
+      if (!resolved) { ctx.reply('This chat is not registered.'); return; }
+      this.opts.onStopContainer?.(resolved.jid);
       ctx.reply('Container stopped.');
     });
 
-    // Switch model provider for this chat
-    this.bot.command('model', (ctx) => {
-      const jid = buildJid({ chat: ctx.chat, message: ctx.message as any });
-      const group = this.opts.registeredGroups()[jid];
-      if (!group) {
-        ctx.reply('This chat is not registered.');
+    // Switch model within current provider (does NOT change runtime or clear session)
+    this.bot.command('model', async (ctx) => {
+      const resolved = this.resolveGroup(ctx);
+      if (!resolved) { ctx.reply('This chat is not registered.'); return; }
+      const { jid } = resolved;
+
+      const current = this.opts.onGetModel?.(jid) || { provider: 'claude' };
+      const modelId = ctx.match?.trim();
+      if (!modelId) {
+        // Show model buttons for current provider
+        if (current.provider === 'claude') {
+          ctx.reply('Claude Agent SDK uses the default model. Use /pi to switch to pi-mono first.');
+          return;
+        }
+        try {
+          const piAi = await import('@mariozechner/pi-ai');
+          const models = piAi.getModels(current.provider as any);
+          const kb = new InlineKeyboard();
+          for (let i = 0; i < models.length; i++) {
+            const m = models[i] as any;
+            const label = m.id === current.modelId ? `✓ ${m.id}` : m.id;
+            kb.text(label, `model:${m.id}`);
+            if ((i + 1) % 2 === 0) kb.row();
+          }
+          ctx.reply(`Provider: ${current.provider}\nSelect a model:`, { reply_markup: kb });
+        } catch {
+          ctx.reply(`Could not load models for ${current.provider}.`);
+        }
         return;
       }
 
-      const args = ctx.match?.trim();
-      if (!args) {
+      this.opts.onSetModel?.(jid, current.provider, modelId);
+      // Also update pi preference if current provider is a pi provider
+      if (current.provider !== 'claude') {
+        const resolved2 = this.resolveGroup(ctx);
+        if (resolved2) setLastPiPreference(resolved2.group.folder, current.provider, modelId);
+      }
+      ctx.reply(`Model set to ${modelId} (provider: ${current.provider}).`);
+    });
+
+    // Switch to pi-mono runtime (clears session)
+    this.bot.command('pi', (ctx) => {
+      const resolved = this.resolveGroup(ctx);
+      if (!resolved) { ctx.reply('This chat is not registered.'); return; }
+      const { jid, group } = resolved;
+
+      const provider = ctx.match?.trim().toLowerCase();
+
+      if (provider && !(PI_PROVIDERS as readonly string[]).includes(provider)) {
+        ctx.reply(`Unknown pi-mono provider: ${provider}\nValid: ${PI_PROVIDERS.join(', ')}`);
+        return;
+      }
+
+      // No argument: show provider buttons
+      if (!provider) {
+        const authed = getAuthStatus().filter(s => s.authenticated);
+        if (authed.length === 0) {
+          ctx.reply(`No authenticated pi-mono provider. Use /pi_login <provider> first.`);
+          return;
+        }
         const current = this.opts.onGetModel?.(jid) || { provider: 'claude' };
-        ctx.reply(
-          `Current model: ${current.provider}${current.modelId ? ` (${current.modelId})` : ''}\n\nUsage: /model <provider> [model_id]\nProviders: claude, google, openai`,
-        );
+        const kb = new InlineKeyboard();
+        for (const s of authed) {
+          const label = s.provider === current.provider ? `✓ ${s.provider}` : s.provider;
+          kb.text(label, `pi:${s.provider}`).row();
+        }
+        ctx.reply('Select a pi-mono provider:', { reply_markup: kb });
         return;
       }
 
-      const parts = args.split(/\s+/);
-      const provider = parts[0].toLowerCase();
-      const modelId = parts[1] || undefined;
-
-      const validProviders = ['claude', 'google', 'openai'];
-      if (!validProviders.includes(provider)) {
-        ctx.reply(
-          `Unknown provider: ${provider}\nValid: ${validProviders.join(', ')}`,
-        );
-        return;
-      }
-
-      this.opts.onSetModel?.(jid, provider, modelId);
+      // Restore saved modelId if switching back to the same provider
+      const lastPi = getLastPiPreference(group.folder);
+      const restoredModelId = lastPi?.provider === provider ? lastPi.modelId : undefined;
+      setLastPiPreference(group.folder, provider, restoredModelId);
+      this.opts.onSetModel?.(jid, provider, restoredModelId);
       this.opts.onClearSession?.(jid);
-      ctx.reply(
-        `Model switched to ${provider}${modelId ? ` (${modelId})` : ''}. Session cleared.`,
-      );
+      const modelSuffix = restoredModelId ? ` (model: ${restoredModelId})` : '';
+      ctx.reply(`Switched to pi-mono/${provider}${modelSuffix}. Session cleared.`);
+    });
+
+    // Switch to Claude Agent SDK runtime (clears session)
+    this.bot.command('cla', (ctx) => {
+      const resolved = this.resolveGroup(ctx);
+      if (!resolved) { ctx.reply('This chat is not registered.'); return; }
+      // Save current pi preference before switching away
+      const current = this.opts.onGetModel?.(resolved.jid);
+      if (current && current.provider !== 'claude') {
+        setLastPiPreference(resolved.group.folder, current.provider, current.modelId);
+      }
+      this.opts.onSetModel?.(resolved.jid, 'claude');
+      this.opts.onClearSession?.(resolved.jid);
+      ctx.reply('Switched to Claude Agent SDK. Session cleared.');
     });
 
     // One-shot query with a specific provider
     this.bot.command('ask', (ctx) => {
-      const jid = buildJid({ chat: ctx.chat, message: ctx.message as any });
-      const group = this.opts.registeredGroups()[jid];
-      if (!group) {
-        ctx.reply('This chat is not registered.');
-        return;
-      }
+      const resolved = this.resolveGroup(ctx);
+      if (!resolved) { ctx.reply('This chat is not registered.'); return; }
+      const { jid } = resolved;
 
       const args = ctx.match?.trim();
       if (!args) {
@@ -203,16 +275,18 @@ export class TelegramChannel implements Channel {
         gemini: 'google',
         gpt: 'openai',
         codex: 'openai',
+        copilot: 'github-copilot',
         claude: 'claude',
         google: 'google',
         openai: 'openai',
+        anthropic: 'anthropic',
+        'github-copilot': 'github-copilot',
+        'google-antigravity': 'google-antigravity',
       };
 
       const resolvedProvider = providerMap[providerArg];
       if (!resolvedProvider) {
-        ctx.reply(
-          `Unknown provider: ${providerArg}\nValid: claude, gemini, codex, google, openai`,
-        );
+        ctx.reply(`Unknown provider: ${providerArg}\nValid: claude, anthropic, gemini, google, openai, codex, copilot, github-copilot, google-antigravity`);
         return;
       }
 
@@ -235,18 +309,25 @@ export class TelegramChannel implements Channel {
       this.reactSeen(ctx.chat.id, ctx.message!.message_id);
     });
 
-    // OAuth authentication
-    this.bot.command('auth', async (ctx) => {
+    // Pi-mono OAuth login
+    this.bot.command('pi_login', async (ctx) => {
       const args = ctx.match?.trim();
 
       if (!args) {
         const status = getAuthStatus();
-        const lines = status.map(
-          (s) => `${s.authenticated ? '✅' : '❌'} ${s.provider}`,
-        );
-        ctx.reply(
-          `OAuth status:\n${lines.join('\n')}\n\nUsage:\n/auth <provider> — start OAuth\n/auth revoke <provider> — remove credentials`,
-        );
+        const kb = new InlineKeyboard();
+        for (const s of status) {
+          const label = s.authenticated ? `✅ ${s.provider}` : `❌ ${s.provider}`;
+          kb.text(label, `login:${s.provider}`).row();
+        }
+        // Add revoke button for authenticated providers
+        const authed = status.filter(s => s.authenticated);
+        if (authed.length > 0) {
+          for (const s of authed) {
+            kb.text(`🗑 Revoke ${s.provider}`, `revoke:${s.provider}`).row();
+          }
+        }
+        ctx.reply('Pi-mono OAuth — select a provider to login:', { reply_markup: kb });
         return;
       }
 
@@ -261,7 +342,7 @@ export class TelegramChannel implements Channel {
         return;
       }
 
-      const provider = args;
+      const provider = args.toLowerCase();
       if (!isValidProvider(provider)) {
         const status = getAuthStatus();
         ctx.reply(
@@ -320,6 +401,90 @@ export class TelegramChannel implements Channel {
       });
 
       ctx.reply(`Tool requirements:\n\n${lines.join('\n\n')}`);
+    });
+
+    // Handle inline keyboard callbacks for /pi, /model, /pi_login
+    this.bot.on('callback_query:data', async (ctx) => {
+      const data = ctx.callbackQuery.data;
+      const chatJid = buildJid({ chat: ctx.chat!, message: ctx.callbackQuery.message as any });
+
+      // Resolve group with fallback to parent for forum topics
+      const resolveCallbackGroup = (): { jid: string; group: RegisteredGroup } | null => {
+        const groups = this.opts.registeredGroups();
+        const group = groups[chatJid];
+        if (group) return { jid: chatJid, group };
+        const { chatId, threadId } = parseJid(chatJid);
+        if (threadId) {
+          const parentJid = `tg:${chatId}`;
+          const parentGroup = groups[parentJid];
+          if (parentGroup) return { jid: parentJid, group: parentGroup };
+        }
+        return null;
+      };
+
+      if (data.startsWith('pi:')) {
+        const resolved = resolveCallbackGroup();
+        if (!resolved) { await ctx.answerCallbackQuery({ text: 'Chat not registered.' }); return; }
+        const provider = data.slice(3);
+        const lastPi = getLastPiPreference(resolved.group.folder);
+        const restoredModelId = lastPi?.provider === provider ? lastPi.modelId : undefined;
+        setLastPiPreference(resolved.group.folder, provider, restoredModelId);
+        this.opts.onSetModel?.(resolved.jid, provider, restoredModelId);
+        this.opts.onClearSession?.(resolved.jid);
+        const modelSuffix = restoredModelId ? ` (model: ${restoredModelId})` : '';
+        await ctx.editMessageText(`Switched to pi-mono/${provider}${modelSuffix}. Session cleared.`);
+        await ctx.answerCallbackQuery();
+      } else if (data.startsWith('model:')) {
+        const resolved = resolveCallbackGroup();
+        if (!resolved) { await ctx.answerCallbackQuery({ text: 'Chat not registered.' }); return; }
+        const modelId = data.slice(6);
+        const current = this.opts.onGetModel?.(resolved.jid) || { provider: 'claude' };
+        this.opts.onSetModel?.(resolved.jid, current.provider, modelId);
+        if (current.provider !== 'claude') {
+          setLastPiPreference(resolved.group.folder, current.provider, modelId);
+        }
+        await ctx.editMessageText(`Model set to ${modelId} (provider: ${current.provider}).`);
+        await ctx.answerCallbackQuery();
+      } else if (data.startsWith('login:')) {
+        const provider = data.slice(6);
+        if (!isValidProvider(provider)) {
+          await ctx.answerCallbackQuery({ text: 'Invalid provider.' });
+          return;
+        }
+        const chatId = ctx.chat!.id;
+        if (this.pendingAuthResolve.has(chatId)) {
+          await ctx.answerCallbackQuery({ text: 'OAuth already in progress.' });
+          return;
+        }
+        await ctx.editMessageText(`Starting OAuth for ${provider}...`);
+        await ctx.answerCallbackQuery();
+        try {
+          await startOAuthFlow(provider, {
+            onUrl: (url, instructions) => {
+              const msg = instructions
+                ? `${instructions}\n\n${url}\n\nPaste the code/URL you receive back here.`
+                : `Open this URL to authenticate:\n${url}\n\nPaste the code/URL you receive back here.`;
+              this.bot!.api.sendMessage(chatId, msg);
+            },
+            onMessage: (msg) => this.bot!.api.sendMessage(chatId, msg),
+            onPromptCode: () => new Promise<string>((resolve) => {
+              this.pendingAuthResolve.set(chatId, resolve);
+            }),
+          });
+          this.bot!.api.sendMessage(chatId, `✅ ${provider} authenticated successfully.`);
+        } catch (err) {
+          this.bot!.api.sendMessage(chatId, `❌ OAuth failed: ${err instanceof Error ? err.message : String(err)}`);
+        } finally {
+          this.pendingAuthResolve.delete(chatId);
+        }
+      } else if (data.startsWith('revoke:')) {
+        const provider = data.slice(7);
+        const revoked = revokeAuth(provider);
+        await ctx.editMessageText(revoked ? `Credentials for ${provider} revoked.` : `No credentials found for ${provider}.`);
+        await ctx.answerCallbackQuery();
+      } else {
+        await ctx.answerCallbackQuery();
+      }
     });
 
     this.bot.on('message:text', async (ctx) => {
@@ -462,6 +627,7 @@ export class TelegramChannel implements Channel {
     // Start polling — returns a Promise that resolves when started
     return new Promise<void>((resolve) => {
       this.bot!.start({
+        allowed_updates: ['message', 'callback_query', 'my_chat_member'],
         onStart: (botInfo) => {
           logger.info(
             { username: botInfo.username, id: botInfo.id },

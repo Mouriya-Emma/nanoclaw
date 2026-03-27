@@ -19,13 +19,21 @@ export function createSessionManager(sessionId?: string): SessionManager {
   const sessDir = getSessionDir();
 
   if (sessionId) {
-    // Try to open existing session file
-    const sessionFile = path.join(sessDir, `${sessionId}.jsonl`);
-    if (fs.existsSync(sessionFile)) {
+    // Session files are named {timestamp}_{sessionId}.jsonl by SessionManager.
+    // Search for any file whose name ends with the sessionId.
+    const exactFile = path.join(sessDir, `${sessionId}.jsonl`);
+    if (fs.existsSync(exactFile)) {
       log(`Resuming session: ${sessionId}`);
-      return SessionManager.open(sessionFile, sessDir);
+      return SessionManager.open(exactFile, sessDir);
     }
-    log(`Session file not found: ${sessionFile}, creating new`);
+    // Search for timestamp-prefixed variant
+    const match = fs.readdirSync(sessDir).find(f => f.endsWith(`_${sessionId}.jsonl`));
+    if (match) {
+      const matchPath = path.join(sessDir, match);
+      log(`Resuming session: ${sessionId} (file: ${match})`);
+      return SessionManager.open(matchPath, sessDir);
+    }
+    log(`Session file not found for ${sessionId}, creating new`);
   }
 
   log('Creating new session');

@@ -6,14 +6,10 @@ import { PassThrough } from 'stream';
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
-// Mock mcp-proxy
-vi.mock('./mcp-proxy.js', () => ({
-  readHostExecAllowlist: () => [],
-}));
-
 // Mock config
 vi.mock('./config.js', () => ({
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
+  PI_CONTAINER_IMAGE: 'nanoclaw-pi:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
   CONTAINER_TIMEOUT: 1800000, // 30min
   CREDENTIAL_PROXY_PORT: 3001,
@@ -23,6 +19,11 @@ vi.mock('./config.js', () => ({
   IDLE_TIMEOUT: 1800000, // 30min
   PROVIDER_SECRET_KEYS: {
     claude: ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
+    google: ['GOOGLE_API_KEY'],
+    openai: ['OPENAI_API_KEY'],
+    anthropic: [],
+    'github-copilot': [],
+    'google-antigravity': [],
   },
   TIMEZONE: 'America/Los_Angeles',
 }));
@@ -58,6 +59,31 @@ vi.mock('fs', async () => {
 // Mock mount-security
 vi.mock('./mount-security.js', () => ({
   validateAdditionalMounts: vi.fn(() => []),
+}));
+
+// Mock mcp-proxy
+vi.mock('./mcp-proxy.js', () => ({
+  readHostExecAllowlist: vi.fn(() => []),
+}));
+
+// Mock container-runtime
+vi.mock('./container-runtime.js', () => ({
+  CONTAINER_HOST_GATEWAY: 'host-gateway',
+  CONTAINER_RUNTIME_BIN: 'docker',
+  hostGatewayArgs: vi.fn(() => ['--add-host=host.docker.internal:host-gateway']),
+  readonlyMountArgs: vi.fn((host: string, container: string) => ['-v', `${host}:${container}:ro`]),
+  stopContainer: vi.fn((name: string) => `docker stop ${name}`),
+}));
+
+// Mock group-folder
+vi.mock('./group-folder.js', () => ({
+  resolveGroupFolderPath: vi.fn((folder: string) => `/tmp/nanoclaw-test-groups/${folder}`),
+  resolveGroupIpcPath: vi.fn((folder: string) => `/tmp/nanoclaw-test-ipc/${folder}`),
+}));
+
+// Mock env
+vi.mock('./env.js', () => ({
+  readEnvFile: vi.fn(() => ({})),
 }));
 
 // Create a controllable fake ChildProcess

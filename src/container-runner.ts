@@ -49,8 +49,8 @@ export interface ContainerInput {
   assistantName?: string;
   script?: string;
   hostMcpServers?: Record<string, { url: string }>;
-  provider?: string; // 'claude' | 'google' | 'openai'
-  modelId?: string; // 'gemini-2.5-flash' | 'gpt-4o'
+  provider?: string; // 'claude' | 'anthropic' | 'google' | 'openai' | 'github-copilot' | 'google-antigravity'
+  modelId?: string; // specific model id within the provider
   secrets?: Record<string, string>;
 }
 

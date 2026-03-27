@@ -76,6 +76,9 @@ export { escapeXml, formatMessages } from './router.js';
 
 let lastTimestamp = '';
 let sessions: Record<string, string> = {};
+/** Groups whose sessions have been explicitly cleared.
+ *  Prevents a dying container from writing back a stale sessionId. */
+const sessionCleared = new Set<string>();
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
@@ -319,6 +322,8 @@ async function runAgent(
   overrideProvider?: string,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
+  // New container starting — clear the "session invalidated" flag from any prior /clear
+  sessionCleared.delete(group.folder);
   const sessionId = sessions[group.folder];
 
   // Determine provider: override > group preference > claude
@@ -355,7 +360,7 @@ async function runAgent(
   // Wrap onOutput to track session ID from streamed results
   const wrappedOnOutput = onOutput
     ? async (output: ContainerOutput) => {
-        if (output.newSessionId) {
+        if (output.newSessionId && !sessionCleared.has(group.folder)) {
           sessions[group.folder] = output.newSessionId;
           setSession(group.folder, output.newSessionId);
         }
@@ -393,7 +398,7 @@ async function runAgent(
       wrappedOnOutput,
     );
 
-    if (output.newSessionId) {
+    if (output.newSessionId && !sessionCleared.has(group.folder)) {
       sessions[group.folder] = output.newSessionId;
       setSession(group.folder, output.newSessionId);
     }
@@ -656,6 +661,7 @@ async function main(): Promise<void> {
       const group = registeredGroups[jid];
       if (!group) return;
       delete sessions[group.folder];
+      sessionCleared.add(group.folder);
       queue.closeStdin(jid);
       logger.info({ jid, group: group.name }, 'Session cleared via /clear');
     },

@@ -19,7 +19,14 @@
     "lint:fix": "eslint src/ --fix",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "vitest run --config e2e/vitest.config.ts",
+    "test:e2e": "vitest run --config e2e/vitest.workspace.ts",
+    "test:e2e:commands": "vitest run --config e2e/vitest.workspace.ts --project commands",
+    "test:e2e:flow": "vitest run --config e2e/vitest.workspace.ts --project message-flow",
+    "test:e2e:mcp": "vitest run --config e2e/vitest.workspace.ts --project mcp-tools",
+    "test:e2e:coding": "vitest run --config e2e/vitest.workspace.ts --project coding",
+    "test:e2e:ipc": "vitest run --config e2e/vitest.workspace.ts --project ipc-tools",
+    "test:e2e:hostexec": "vitest run --config e2e/vitest.workspace.ts --project host-exec",
+    "test:e2e:session": "vitest run --config e2e/vitest.workspace.ts --project session",
     "e2e:auth": "tsx e2e/auth.ts"
   },
   "dependencies": {
