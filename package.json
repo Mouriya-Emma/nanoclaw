@@ -18,9 +18,12 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "vitest run --config e2e/vitest.config.ts",
+    "e2e:auth": "tsx e2e/auth.ts"
   },
   "dependencies": {
+    "@mariozechner/pi-ai": "^0.55.0",
     "@modelcontextprotocol/sdk": "^1.12.1",
     "better-sqlite3": "11.10.0",
     "cron-parser": "5.5.0",
@@ -40,6 +43,7 @@
     "globals": "^15.12.0",
     "husky": "^9.1.7",
     "prettier": "^3.8.1",
+    "telegram": "^2.26.22",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.35.0",

@@ -36,9 +36,11 @@ import {
   getAllSessions,
   getAllTasks,
   getMessagesSince,
+  getModelPreference,
   getNewMessages,
   getRouterState,
   initDatabase,
+  setModelPreference,
   setRegisteredGroup,
   setRouterState,
   setSession,
@@ -210,7 +212,15 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages, TIMEZONE);
+  let prompt = formatMessages(missedMessages, TIMEZONE);
+
+  // Check for /ask prefix (single-use model override)
+  let overrideProvider: string | undefined;
+  const askMatch = prompt.match(/^__ASK_(\w+)__ /);
+  if (askMatch) {
+    overrideProvider = askMatch[1].toLowerCase();
+    prompt = prompt.replace(/^__ASK_\w+__ /, '');
+  }
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -242,32 +252,38 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info({ group: group.name }, `Agent output: ${raw.length} chars`);
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  });
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+    overrideProvider,
+  );
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -300,9 +316,15 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
+  overrideProvider?: string,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   const sessionId = sessions[group.folder];
+
+  // Determine provider: override > group preference > claude
+  const modelPref = overrideProvider
+    ? { provider: overrideProvider }
+    : getModelPreference(group.folder);
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -356,13 +378,15 @@ async function runAgent(
       group,
       {
         prompt,
-        sessionId,
+        sessionId: overrideProvider ? undefined : sessionId, // fresh session for /ask
         groupFolder: group.folder,
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
         hostMcpServers:
           Object.keys(hostMcpServers).length > 0 ? hostMcpServers : undefined,
+        provider: modelPref.provider,
+        modelId: modelPref.modelId,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -638,6 +662,17 @@ async function main(): Promise<void> {
     onStopContainer: (jid: string) => {
       queue.closeStdin(jid);
       logger.info({ jid }, 'Container stopped via /stop');
+    },
+    onSetModel: (jid: string, provider: string, modelId?: string) => {
+      const group = registeredGroups[jid];
+      if (!group) return;
+      setModelPreference(group.folder, { provider, modelId });
+      logger.info({ jid, provider, modelId }, 'Model preference updated');
+    },
+    onGetModel: (jid: string) => {
+      const group = registeredGroups[jid];
+      if (!group) return { provider: 'claude' };
+      return getModelPreference(group.folder);
     },
   };
 

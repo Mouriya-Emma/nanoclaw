@@ -21,6 +21,9 @@ vi.mock('./config.js', () => ({
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
   HOST_EXEC_ALLOWLIST: '',
   IDLE_TIMEOUT: 1800000, // 30min
+  PROVIDER_SECRET_KEYS: {
+    claude: ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
+  },
   TIMEZONE: 'America/Los_Angeles',
 }));
 

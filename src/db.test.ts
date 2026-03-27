@@ -3,12 +3,15 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   _initTestDatabase,
   createTask,
+  deleteModelPreference,
   deleteTask,
   getAllChats,
   getAllRegisteredGroups,
   getMessagesSince,
+  getModelPreference,
   getNewMessages,
   getTaskById,
+  setModelPreference,
   setRegisteredGroup,
   storeChatMetadata,
   storeMessage,
@@ -480,5 +483,29 @@ describe('registered group isMain', () => {
     const group = groups['group@g.us'];
     expect(group).toBeDefined();
     expect(group.isMain).toBeUndefined();
+  });
+});
+
+// --- Model preferences ---
+
+describe('model preferences', () => {
+  it('returns claude as default when no preference set', () => {
+    const pref = getModelPreference('test-group');
+    expect(pref).toEqual({ provider: 'claude' });
+  });
+
+  it('stores and retrieves model preference', () => {
+    setModelPreference('test-group', {
+      provider: 'google',
+      modelId: 'gemini-2.5-flash',
+    });
+    const pref = getModelPreference('test-group');
+    expect(pref).toEqual({ provider: 'google', modelId: 'gemini-2.5-flash' });
+  });
+
+  it('deletes model preference', () => {
+    setModelPreference('test-group', { provider: 'openai' });
+    deleteModelPreference('test-group');
+    expect(getModelPreference('test-group')).toEqual({ provider: 'claude' });
   });
 });

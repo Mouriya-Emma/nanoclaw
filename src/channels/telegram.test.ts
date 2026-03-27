@@ -5,6 +5,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 // Mock config
 vi.mock('../config.js', () => ({
   ASSISTANT_NAME: 'Andy',
+  DATA_DIR: '/tmp/nanoclaw-test-data',
   TRIGGER_PATTERN: /^@Andy\b/i,
 }));
 

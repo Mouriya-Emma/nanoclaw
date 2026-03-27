@@ -16,6 +16,8 @@ import {
   GROUPS_DIR,
   HOST_EXEC_ALLOWLIST,
   IDLE_TIMEOUT,
+  PI_CONTAINER_IMAGE,
+  PROVIDER_SECRET_KEYS,
   TIMEZONE,
 } from './config.js';
 import { readHostExecAllowlist } from './mcp-proxy.js';
@@ -29,6 +31,7 @@ import {
   stopContainer,
 } from './container-runtime.js';
 import { detectAuthMode } from './credential-proxy.js';
+import { readEnvFile } from './env.js';
 import { validateAdditionalMounts } from './mount-security.js';
 import { RegisteredGroup } from './types.js';
 
@@ -46,6 +49,9 @@ export interface ContainerInput {
   assistantName?: string;
   script?: string;
   hostMcpServers?: Record<string, { url: string }>;
+  provider?: string; // 'claude' | 'google' | 'openai'
+  modelId?: string; // 'gemini-2.5-flash' | 'gpt-4o'
+  secrets?: Record<string, string>;
 }
 
 export interface ContainerOutput {
@@ -64,6 +70,7 @@ interface VolumeMount {
 function buildVolumeMounts(
   group: RegisteredGroup,
   isMain: boolean,
+  provider?: string,
 ): VolumeMount[] {
   const mounts: VolumeMount[] = [];
   const projectRoot = process.cwd();
@@ -118,105 +125,112 @@ function buildVolumeMounts(
     }
   }
 
-  // Per-group Claude sessions directory (isolated from other groups)
-  // Each group gets their own .claude/ to prevent cross-group session access
-  const groupSessionsDir = path.join(
-    DATA_DIR,
-    'sessions',
-    group.folder,
-    '.claude',
-  );
-  fs.mkdirSync(groupSessionsDir, { recursive: true });
-  const settingsFile = path.join(groupSessionsDir, 'settings.json');
-  if (!fs.existsSync(settingsFile)) {
-    fs.writeFileSync(
-      settingsFile,
-      JSON.stringify(
-        {
-          language: 'zh-CN',
-          env: {
-            // Enable agent swarms (subagent orchestration)
-            // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
-            CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-            // Load CLAUDE.md from additional mounted directories
-            // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
-            CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-            // Enable Claude's memory feature (persists user preferences between sessions)
-            // https://code.claude.com/docs/en/memory#manage-auto-memory
-            CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
-          },
-        },
-        null,
-        2,
-      ) + '\n',
+  // Claude-specific: .claude/ directory with settings, skills, plugins
+  // Pi-mono doesn't need this — it uses its own session management
+  if (!provider || provider === 'claude') {
+    // Per-group Claude sessions directory (isolated from other groups)
+    // Each group gets their own .claude/ to prevent cross-group session access
+    const groupSessionsDir = path.join(
+      DATA_DIR,
+      'sessions',
+      group.folder,
+      '.claude',
     );
-  }
-
-  // Sync skills from container/skills/ into each group's .claude/skills/
-  const skillsSrc = path.join(process.cwd(), 'container', 'skills');
-  const skillsDst = path.join(groupSessionsDir, 'skills');
-  if (fs.existsSync(skillsSrc)) {
-    for (const skillDir of fs.readdirSync(skillsSrc)) {
-      const srcDir = path.join(skillsSrc, skillDir);
-      if (!fs.statSync(srcDir).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, skillDir);
-      fs.cpSync(srcDir, dstDir, { recursive: true });
-    }
-  }
-
-  // Sync host user's skills (from ~/.claude/skills/) so container agents
-  // have the same skills available as the host Claude Code instance.
-  // Resolves symlinks so the actual skill files are copied.
-  const hostClaudeDir = path.join(os.homedir(), '.claude');
-  const hostSkillsDir = path.join(hostClaudeDir, 'skills');
-  if (fs.existsSync(hostSkillsDir)) {
-    for (const entry of fs.readdirSync(hostSkillsDir)) {
-      const srcPath = path.join(hostSkillsDir, entry);
-      const realSrc = fs.realpathSync(srcPath);
-      if (!fs.statSync(realSrc).isDirectory()) continue;
-      const dstDir = path.join(skillsDst, entry);
-      fs.cpSync(realSrc, dstDir, { recursive: true });
-    }
-  }
-
-  // Sync host user's plugins (from ~/.claude/plugins/) so container agents
-  // can use the same plugins. Rewrites installPath entries to match the
-  // container's home directory (/home/node/.claude/).
-  const hostPluginsDir = path.join(hostClaudeDir, 'plugins');
-  const pluginsDst = path.join(groupSessionsDir, 'plugins');
-  if (fs.existsSync(hostPluginsDir)) {
-    const hostCacheDir = path.join(hostPluginsDir, 'cache');
-    if (fs.existsSync(hostCacheDir)) {
-      const dstCacheDir = path.join(pluginsDst, 'cache');
-      fs.cpSync(hostCacheDir, dstCacheDir, {
-        recursive: true,
-        filter: (src) => !src.includes('/.git'),
-      });
-    }
-    const installedFile = path.join(hostPluginsDir, 'installed_plugins.json');
-    if (fs.existsSync(installedFile)) {
-      const content = fs.readFileSync(installedFile, 'utf-8');
-      const rewritten = content.replaceAll(hostClaudeDir, '/home/node/.claude');
-      fs.mkdirSync(pluginsDst, { recursive: true });
+    fs.mkdirSync(groupSessionsDir, { recursive: true });
+    const settingsFile = path.join(groupSessionsDir, 'settings.json');
+    if (!fs.existsSync(settingsFile)) {
       fs.writeFileSync(
-        path.join(pluginsDst, 'installed_plugins.json'),
-        rewritten,
+        settingsFile,
+        JSON.stringify(
+          {
+            language: 'zh-CN',
+            env: {
+              // Enable agent swarms (subagent orchestration)
+              // https://code.claude.com/docs/en/agent-teams#orchestrate-teams-of-claude-code-sessions
+              CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+              // Load CLAUDE.md from additional mounted directories
+              // https://code.claude.com/docs/en/memory#load-memory-from-additional-directories
+              CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
+              // Enable Claude's memory feature (persists user preferences between sessions)
+              // https://code.claude.com/docs/en/memory#manage-auto-memory
+              CLAUDE_CODE_DISABLE_AUTO_MEMORY: '0',
+            },
+          },
+          null,
+          2,
+        ) + '\n',
       );
     }
-    for (const configFile of ['blocklist.json', 'known_marketplaces.json']) {
-      const src = path.join(hostPluginsDir, configFile);
-      if (fs.existsSync(src)) {
-        fs.mkdirSync(pluginsDst, { recursive: true });
-        fs.copyFileSync(src, path.join(pluginsDst, configFile));
+
+    // Sync skills from container/skills/ into each group's .claude/skills/
+    const skillsSrc = path.join(process.cwd(), 'container', 'skills');
+    const skillsDst = path.join(groupSessionsDir, 'skills');
+    if (fs.existsSync(skillsSrc)) {
+      for (const skillDir of fs.readdirSync(skillsSrc)) {
+        const srcDir = path.join(skillsSrc, skillDir);
+        if (!fs.statSync(srcDir).isDirectory()) continue;
+        const dstDir = path.join(skillsDst, skillDir);
+        fs.cpSync(srcDir, dstDir, { recursive: true });
       }
     }
-  }
 
-  mounts.push({
-    hostPath: groupSessionsDir,
-    containerPath: '/home/node/.claude',
-    readonly: false,
-  });
+    // Sync host user's skills (from ~/.claude/skills/) so container agents
+    // have the same skills available as the host Claude Code instance.
+    // Resolves symlinks so the actual skill files are copied.
+    const hostClaudeDir = path.join(os.homedir(), '.claude');
+    const hostSkillsDir = path.join(hostClaudeDir, 'skills');
+    if (fs.existsSync(hostSkillsDir)) {
+      for (const entry of fs.readdirSync(hostSkillsDir)) {
+        const srcPath = path.join(hostSkillsDir, entry);
+        const realSrc = fs.realpathSync(srcPath);
+        if (!fs.statSync(realSrc).isDirectory()) continue;
+        const dstDir = path.join(skillsDst, entry);
+        fs.cpSync(realSrc, dstDir, { recursive: true });
+      }
+    }
+
+    // Sync host user's plugins
+    const hostPluginsDir = path.join(hostClaudeDir, 'plugins');
+    const pluginsDst = path.join(groupSessionsDir, 'plugins');
+    if (fs.existsSync(hostPluginsDir)) {
+      const hostCacheDir = path.join(hostPluginsDir, 'cache');
+      if (fs.existsSync(hostCacheDir)) {
+        const dstCacheDir = path.join(pluginsDst, 'cache');
+        fs.cpSync(hostCacheDir, dstCacheDir, {
+          recursive: true,
+          filter: (src) => !src.includes('/.git'),
+        });
+      }
+
+      const installedFile = path.join(hostPluginsDir, 'installed_plugins.json');
+      if (fs.existsSync(installedFile)) {
+        const content = fs.readFileSync(installedFile, 'utf-8');
+        const rewritten = content.replaceAll(
+          hostClaudeDir,
+          '/home/node/.claude',
+        );
+        fs.mkdirSync(pluginsDst, { recursive: true });
+        fs.writeFileSync(
+          path.join(pluginsDst, 'installed_plugins.json'),
+          rewritten,
+        );
+      }
+
+      for (const configFile of ['blocklist.json', 'known_marketplaces.json']) {
+        const src = path.join(hostPluginsDir, configFile);
+        if (fs.existsSync(src)) {
+          fs.mkdirSync(pluginsDst, { recursive: true });
+          fs.copyFileSync(src, path.join(pluginsDst, configFile));
+        }
+      }
+    }
+
+    mounts.push({
+      hostPath: groupSessionsDir,
+      containerPath: '/home/node/.claude',
+      readonly: false,
+    });
+  }
 
   // Per-group IPC namespace: each group gets its own IPC directory
   // This prevents cross-group privilege escalation via IPC
@@ -230,20 +244,18 @@ function buildVolumeMounts(
     readonly: false,
   });
 
-  // Copy agent-runner source into a per-group writable location so agents
+  // Copy runner source into a per-group writable location so agents
   // can customize it (add tools, change behavior) without affecting other
   // groups. Recompiled on container startup via entrypoint.sh.
-  const agentRunnerSrc = path.join(
-    projectRoot,
-    'container',
-    'agent-runner',
-    'src',
-  );
+  // Select runner directory based on provider.
+  const runnerDir =
+    !provider || provider === 'claude' ? 'agent-runner' : 'pi-runner';
+  const agentRunnerSrc = path.join(projectRoot, 'container', runnerDir, 'src');
   const groupAgentRunnerDir = path.join(
     DATA_DIR,
     'sessions',
     group.folder,
-    'agent-runner-src',
+    `${runnerDir}-src`,
   );
   if (fs.existsSync(agentRunnerSrc)) {
     const srcIndex = path.join(agentRunnerSrc, 'index.ts');
@@ -304,9 +316,27 @@ function buildVolumeMounts(
   return mounts;
 }
 
+/**
+ * Read allowed secrets from .env for passing to the container via stdin.
+ * Secrets are never written to disk or mounted as files.
+ */
+function readSecrets(provider?: string): Record<string, string> {
+  const keys =
+    PROVIDER_SECRET_KEYS[provider || 'claude'] || PROVIDER_SECRET_KEYS.claude;
+  return readEnvFile(keys);
+}
+
+function getContainerImage(provider?: string): string {
+  if (provider && provider !== 'claude') {
+    return PI_CONTAINER_IMAGE;
+  }
+  return CONTAINER_IMAGE;
+}
+
 function buildContainerArgs(
   mounts: VolumeMount[],
   containerName: string,
+  image: string,
 ): string[] {
   const args: string[] = ['run', '-i', '--rm', '--name', containerName];
 
@@ -357,7 +387,7 @@ function buildContainerArgs(
     }
   }
 
-  args.push(CONTAINER_IMAGE);
+  args.push(image);
 
   return args;
 }
@@ -373,10 +403,11 @@ export async function runContainerAgent(
   const groupDir = resolveGroupFolderPath(group.folder);
   fs.mkdirSync(groupDir, { recursive: true });
 
-  const mounts = buildVolumeMounts(group, input.isMain);
+  const mounts = buildVolumeMounts(group, input.isMain, input.provider);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName);
+  const image = getContainerImage(input.provider);
+  const containerArgs = buildContainerArgs(mounts, containerName, image);
 
   logger.debug(
     {
@@ -404,6 +435,15 @@ export async function runContainerAgent(
   const logsDir = path.join(groupDir, 'logs');
   fs.mkdirSync(logsDir, { recursive: true });
 
+  // Pass OAuth credentials to pi-runner containers
+  if (input.provider && input.provider !== 'claude') {
+    const { readAuthCredentials } = await import('./auth-manager.js');
+    const authCreds = readAuthCredentials();
+    if (Object.keys(authCreds).length > 0) {
+      (input as any).oauthCredentials = authCreds;
+    }
+  }
+
   return new Promise((resolve) => {
     const container = spawn(CONTAINER_RUNTIME_BIN, containerArgs, {
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -416,8 +456,14 @@ export async function runContainerAgent(
     let stdoutTruncated = false;
     let stderrTruncated = false;
 
+    // Pass secrets via stdin (never written to disk or mounted as files)
+    input.secrets = readSecrets(input.provider);
+
     container.stdin.write(JSON.stringify(input));
     container.stdin.end();
+    // Remove secrets from input so they don't appear in logs
+    delete input.secrets;
+    delete (input as any).oauthCredentials;
 
     // Streaming output: parse OUTPUT_START/END marker pairs as they arrive
     let parseBuffer = '';

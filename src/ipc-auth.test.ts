@@ -6,6 +6,7 @@ import {
   getAllTasks,
   getRegisteredGroup,
   getTaskById,
+  getToolRequirements,
   setRegisteredGroup,
 } from './db.js';
 import { processTaskIpc, IpcDeps } from './ipc.js';
@@ -675,5 +676,81 @@ describe('register_group success', () => {
     );
 
     expect(getRegisteredGroup('partial@g.us')).toBeUndefined();
+  });
+});
+
+// --- tool_requirement ---
+
+describe('tool_requirement', () => {
+  it('stores a tool requirement via IPC', async () => {
+    await processTaskIpc(
+      {
+        type: 'tool_requirement',
+        tool: 'gh',
+        reason: 'Need GitHub CLI for PRs',
+        needsAuth: true,
+        authProvider: 'github',
+      },
+      'main',
+      true,
+      deps,
+    );
+
+    const reqs = getToolRequirements();
+    expect(reqs).toHaveLength(1);
+    expect(reqs[0].tool_name).toBe('gh');
+    expect(reqs[0].needs_auth).toBe(1);
+    expect(reqs[0].auth_provider).toBe('github');
+  });
+
+  it('upserts on duplicate (group_folder, tool_name)', async () => {
+    await processTaskIpc(
+      {
+        type: 'tool_requirement',
+        tool: 'gh',
+        reason: 'First reason',
+        needsAuth: false,
+      },
+      'main',
+      true,
+      deps,
+    );
+
+    await processTaskIpc(
+      {
+        type: 'tool_requirement',
+        tool: 'gh',
+        reason: 'Updated reason',
+        needsAuth: true,
+        authProvider: 'github',
+      },
+      'main',
+      true,
+      deps,
+    );
+
+    const reqs = getToolRequirements();
+    expect(reqs).toHaveLength(1);
+    expect(reqs[0].reason).toBe('Updated reason');
+    expect(reqs[0].needs_auth).toBe(1);
+  });
+
+  it('stores requirements per group', async () => {
+    await processTaskIpc(
+      { type: 'tool_requirement', tool: 'gh', reason: 'PRs' },
+      'main',
+      true,
+      deps,
+    );
+
+    await processTaskIpc(
+      { type: 'tool_requirement', tool: 'gh', reason: 'PRs too' },
+      'other-group',
+      false,
+      deps,
+    );
+
+    const reqs = getToolRequirements();
+    expect(reqs).toHaveLength(2);
   });
 });

@@ -32,6 +32,11 @@ export interface ContainerConfig {
   timeout?: number; // Default: 300000 (5 minutes)
 }
 
+export interface ModelPreference {
+  provider: string; // 'claude' | 'google' | 'openai'
+  modelId?: string; // 'gemini-2.5-flash' | 'gpt-4o' | etc.
+}
+
 export interface RegisteredGroup {
   name: string;
   folder: string;
@@ -66,6 +71,16 @@ export interface ScheduledTask {
   last_run: string | null;
   last_result: string | null;
   status: 'active' | 'paused' | 'completed';
+  created_at: string;
+}
+
+export interface ToolRequirement {
+  id: number;
+  group_folder: string;
+  tool_name: string;
+  reason: string | null;
+  needs_auth: number;
+  auth_provider: string | null;
   created_at: string;
 }
 

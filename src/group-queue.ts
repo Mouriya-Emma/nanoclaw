@@ -19,6 +19,7 @@ interface GroupState {
   idleWaiting: boolean;
   isTaskContainer: boolean;
   runningTaskId: string | null;
+  closing: boolean;
   pendingMessages: boolean;
   pendingTasks: QueuedTask[];
   process: ChildProcess | null;
@@ -43,6 +44,7 @@ export class GroupQueue {
         idleWaiting: false,
         isTaskContainer: false,
         runningTaskId: null,
+        closing: false,
         pendingMessages: false,
         pendingTasks: [],
         process: null,
@@ -159,7 +161,12 @@ export class GroupQueue {
    */
   sendMessage(groupJid: string, text: string): boolean {
     const state = this.getGroup(groupJid);
-    if (!state.active || !state.groupFolder || state.isTaskContainer)
+    if (
+      !state.active ||
+      !state.groupFolder ||
+      state.isTaskContainer ||
+      state.closing
+    )
       return false;
     state.idleWaiting = false; // Agent is about to receive work, no longer idle
 
@@ -184,6 +191,10 @@ export class GroupQueue {
     const state = this.getGroup(groupJid);
     if (!state.active || !state.groupFolder) return;
 
+    // Mark as closing so sendMessage() rejects new messages.
+    // New messages will be enqueued for a fresh container instead.
+    state.closing = true;
+
     const inputDir = path.join(DATA_DIR, 'ipc', state.groupFolder, 'input');
     try {
       fs.mkdirSync(inputDir, { recursive: true });
@@ -201,6 +212,7 @@ export class GroupQueue {
     state.active = true;
     state.idleWaiting = false;
     state.isTaskContainer = false;
+    state.closing = false;
     state.pendingMessages = false;
     this.activeCount++;
 
@@ -223,6 +235,7 @@ export class GroupQueue {
       this.scheduleRetry(groupJid, state);
     } finally {
       state.active = false;
+      state.closing = false;
       state.process = null;
       state.containerName = null;
       state.groupFolder = null;
@@ -250,6 +263,7 @@ export class GroupQueue {
       logger.error({ groupJid, taskId: task.id, err }, 'Error running task');
     } finally {
       state.active = false;
+      state.closing = false;
       state.isTaskContainer = false;
       state.runningTaskId = null;
       state.process = null;
