@@ -8,6 +8,7 @@ import {
   OnInboundMessage,
   RegisteredGroup,
 } from '../types.js';
+import { registerChannel } from './registry.js';
 
 export interface TelegramChannelOpts {
   onMessage: OnInboundMessage;
@@ -26,7 +27,11 @@ export function buildJid(ctx: {
   const chatId = ctx.chat.id;
   const threadId = ctx.message?.message_thread_id;
   // Only append thread_id for supergroup forum topics
-  if (threadId && ctx.message?.is_topic_message && ctx.chat.type === 'supergroup') {
+  if (
+    threadId &&
+    ctx.message?.is_topic_message &&
+    ctx.chat.type === 'supergroup'
+  ) {
     return `tg:${chatId}:${threadId}`;
   }
   return `tg:${chatId}`;
@@ -42,7 +47,11 @@ export function parseJid(jid: string): { chatId: string; threadId?: number } {
   if (colonIdx > 0) {
     const possibleThread = stripped.slice(colonIdx + 1);
     const threadNum = Number(possibleThread);
-    if (!isNaN(threadNum) && possibleThread.length > 0 && !possibleThread.startsWith('-')) {
+    if (
+      !isNaN(threadNum) &&
+      possibleThread.length > 0 &&
+      !possibleThread.startsWith('-')
+    ) {
       return {
         chatId: stripped.slice(0, colonIdx),
         threadId: threadNum,
@@ -81,10 +90,9 @@ export class TelegramChannel implements Channel {
         message: ctx.message as any,
       });
 
-      ctx.reply(
-        `Chat ID: \`${jid}\`\nName: ${chatName}\nType: ${chatType}`,
-        { parse_mode: 'Markdown' },
-      );
+      ctx.reply(`Chat ID: \`${jid}\`\nName: ${chatName}\nType: ${chatType}`, {
+        parse_mode: 'Markdown',
+      });
     });
 
     // Command to check bot status
@@ -161,7 +169,8 @@ export class TelegramChannel implements Channel {
       this.opts.onChatMetadata(chatJid, timestamp, chatName);
 
       // Auto-register forum topics when parent group is registered
-      let group: RegisteredGroup | undefined = this.opts.registeredGroups()[chatJid];
+      let group: RegisteredGroup | undefined =
+        this.opts.registeredGroups()[chatJid];
       if (!group) {
         group = this.tryAutoRegisterTopic(chatJid, ctx.message as any);
       }
@@ -197,7 +206,8 @@ export class TelegramChannel implements Channel {
     // Handle non-text messages with placeholders so the agent knows something was sent
     const storeNonText = (ctx: any, placeholder: string) => {
       const chatJid = buildJid({ chat: ctx.chat, message: ctx.message });
-      let group: RegisteredGroup | undefined = this.opts.registeredGroups()[chatJid];
+      let group: RegisteredGroup | undefined =
+        this.opts.registeredGroups()[chatJid];
       if (!group) {
         group = this.tryAutoRegisterTopic(chatJid, ctx.message);
       }
@@ -225,9 +235,7 @@ export class TelegramChannel implements Channel {
 
     this.bot.on('message:photo', (ctx) => storeNonText(ctx, '[Photo]'));
     this.bot.on('message:video', (ctx) => storeNonText(ctx, '[Video]'));
-    this.bot.on('message:voice', (ctx) =>
-      storeNonText(ctx, '[Voice message]'),
-    );
+    this.bot.on('message:voice', (ctx) => storeNonText(ctx, '[Voice message]'));
     this.bot.on('message:audio', (ctx) => storeNonText(ctx, '[Audio]'));
     this.bot.on('message:document', (ctx) => {
       const name = ctx.message.document?.file_name || 'file';
@@ -298,7 +306,10 @@ export class TelegramChannel implements Channel {
    */
   private tryAutoRegisterTopic(
     chatJid: string,
-    message?: { reply_to_message?: { forum_topic_created?: { name?: string } }; message_thread_id?: number },
+    message?: {
+      reply_to_message?: { forum_topic_created?: { name?: string } };
+      message_thread_id?: number;
+    },
   ): RegisteredGroup | undefined {
     const { chatId, threadId } = parseJid(chatJid);
     if (!threadId) return undefined;
@@ -333,11 +344,11 @@ export class TelegramChannel implements Channel {
   /** Add 👀 reaction to indicate the bot has seen a message. */
   private reactSeen(chatId: number, messageId: number): void {
     if (!this.bot) return;
-    this.bot.api.setMessageReaction(chatId, messageId, [
-      { type: 'emoji', emoji: '👀' },
-    ]).catch((err) => {
-      logger.debug({ chatId, messageId, err }, 'Failed to set seen reaction');
-    });
+    this.bot.api
+      .setMessageReaction(chatId, messageId, [{ type: 'emoji', emoji: '👀' }])
+      .catch((err) => {
+        logger.debug({ chatId, messageId, err }, 'Failed to set seen reaction');
+      });
   }
 
   isConnected(): boolean {
@@ -367,3 +378,17 @@ export class TelegramChannel implements Channel {
     }
   }
 }
+
+// Self-register with the channel registry
+registerChannel('telegram', (opts) => {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return null;
+  return new TelegramChannel(token, {
+    onMessage: opts.onMessage,
+    onChatMetadata: opts.onChatMetadata,
+    registeredGroups: opts.registeredGroups,
+    onRegisterGroup: opts.onRegisterGroup,
+    onClearSession: opts.onClearSession,
+    onStopContainer: opts.onStopContainer,
+  });
+});

@@ -6,6 +6,11 @@ import { PassThrough } from 'stream';
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
+// Mock mcp-proxy
+vi.mock('./mcp-proxy.js', () => ({
+  readHostExecAllowlist: () => [],
+}));
+
 // Mock config
 vi.mock('./config.js', () => ({
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
@@ -13,7 +18,9 @@ vi.mock('./config.js', () => ({
   CONTAINER_TIMEOUT: 1800000, // 30min
   DATA_DIR: '/tmp/nanoclaw-test-data',
   GROUPS_DIR: '/tmp/nanoclaw-test-groups',
+  HOST_EXEC_ALLOWLIST: '',
   IDLE_TIMEOUT: 1800000, // 30min
+  ONECLI_URL: 'http://localhost:10254',
   TIMEZONE: 'America/Los_Angeles',
 }));
 
@@ -50,6 +57,17 @@ vi.mock('./mount-security.js', () => ({
   validateAdditionalMounts: vi.fn(() => []),
 }));
 
+// Mock OneCLI SDK
+vi.mock('@onecli-sh/sdk', () => ({
+  OneCLI: class {
+    applyContainerConfig = vi.fn().mockResolvedValue(true);
+    createAgent = vi.fn().mockResolvedValue({ id: 'test' });
+    ensureAgent = vi
+      .fn()
+      .mockResolvedValue({ name: 'test', identifier: 'test', created: true });
+  },
+}));
+
 // Create a controllable fake ChildProcess
 function createFakeProcess() {
   const proc = new EventEmitter() as EventEmitter & {
@@ -71,14 +89,17 @@ let fakeProc: ReturnType<typeof createFakeProcess>;
 
 // Mock child_process.spawn
 vi.mock('child_process', async () => {
-  const actual = await vi.importActual<typeof import('child_process')>('child_process');
+  const actual =
+    await vi.importActual<typeof import('child_process')>('child_process');
   return {
     ...actual,
     spawn: vi.fn(() => fakeProc),
-    exec: vi.fn((_cmd: string, _opts: unknown, cb?: (err: Error | null) => void) => {
-      if (cb) cb(null);
-      return new EventEmitter();
-    }),
+    exec: vi.fn(
+      (_cmd: string, _opts: unknown, cb?: (err: Error | null) => void) => {
+        if (cb) cb(null);
+        return new EventEmitter();
+      },
+    ),
   };
 });
 
@@ -99,7 +120,10 @@ const testInput = {
   isMain: false,
 };
 
-function emitOutputMarker(proc: ReturnType<typeof createFakeProcess>, output: ContainerOutput) {
+function emitOutputMarker(
+  proc: ReturnType<typeof createFakeProcess>,
+  output: ContainerOutput,
+) {
   const json = JSON.stringify(output);
   proc.stdout.push(`${OUTPUT_START_MARKER}\n${json}\n${OUTPUT_END_MARKER}\n`);
 }
