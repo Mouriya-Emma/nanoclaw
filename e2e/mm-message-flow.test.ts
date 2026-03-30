@@ -9,10 +9,11 @@ beforeAll(async () => { await startWsListener(); }, 15_000);
 afterAll(() => { stopWsListener(); });
 
 describe('Mattermost message flow', () => {
-  // Ensure Claude provider
+  // Default runtime is Claude SDK — no /cla needed since Mattermost
+  // channel doesn't implement runtime switching commands yet.
   beforeAll(async () => {
-    const reply = await sendAndExpectReply('/cla', { timeout: 10_000 });
-    expect(reply).toContain('Switched to Claude Agent SDK');
+    // Clear any prior session to ensure clean state
+    await send('/clear');
     await interTestDelay();
   });
 
@@ -26,14 +27,10 @@ describe('Mattermost message flow', () => {
     expect(reply.length).toBeGreaterThan(0);
   });
 
-  it('/cla switch then trigger message works', async () => {
-    const switchReply = await sendAndExpectReply('/cla', { timeout: 10_000 });
-    expect(switchReply).toContain('Switched to Claude Agent SDK');
-    await interTestDelay();
-
+  it('follow-up message reuses container', async () => {
     const reply = await sendAndExpectReply(
-      `${TRIGGER} say hello`,
-      { timeout: 180_000 },
+      `${TRIGGER} say goodbye`,
+      { timeout: 120_000 },
     );
     expect(reply.length).toBeGreaterThan(0);
   });
