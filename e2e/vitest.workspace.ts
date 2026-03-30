@@ -107,6 +107,14 @@ export default defineConfig({
           ...shared,
         },
       },
+      {
+        test: {
+          name: 'mm-admin',
+          include: ['e2e/mm-admin.test.ts'],
+          testTimeout: 200_000,
+          ...shared,
+        },
+      },
     ],
   },
 });
