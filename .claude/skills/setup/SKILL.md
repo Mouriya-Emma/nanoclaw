@@ -9,7 +9,7 @@ Run setup steps automatically. Only pause when user action is required (channel 
 
 **Principle:** When something is broken or missing, fix it. Don't tell the user to go fix it themselves unless it genuinely requires their manual action (e.g. authenticating a channel, pasting a secret token). If a dependency is missing, install it. If a service won't start, diagnose and repair. Ask the user for permission when needed, then do the work.
 
-**UX Note:** Use `AskUserQuestion` for all user-facing questions.
+**UX Note:** Use `AskUserQuestion` for multiple-choice questions only (e.g. "Docker or Apple Container?", "which channels?"). Do NOT use it when free-text input is needed (e.g. phone numbers, tokens, paths) — just ask the question in plain text and wait for the user's reply.
 
 ## 0. Git & Fork Setup
 
@@ -84,7 +84,10 @@ Run `npx tsx setup/index.ts --step timezone` and parse the status block.
 Check the preflight results for `APPLE_CONTAINER` and `DOCKER`, and the PLATFORM from step 1.
 
 - PLATFORM=linux → Docker (only option)
-- PLATFORM=macos + APPLE_CONTAINER=installed → Use `AskUserQuestion: Docker (cross-platform) or Apple Container (native macOS)?` If Apple Container, run `/convert-to-apple-container` now, then skip to 3c.
+- PLATFORM=macos + APPLE_CONTAINER=installed → AskUserQuestion with two options:
+  1. **Docker (recommended)** — description: "Cross-platform, better credential management, well-tested."
+  2. **Apple Container (experimental)** — description: "Native macOS runtime. Requires advanced setup."
+  If Apple Container, run `/convert-to-apple-container` now, then skip to 3c.
 - PLATFORM=macos + APPLE_CONTAINER=not_found → Docker
 
 ### 3a-docker. Install Docker
@@ -128,6 +131,31 @@ AskUserQuestion: Claude subscription (Pro/Max) vs Anthropic API key?
 **Subscription:** Tell user to run `claude setup-token` in another terminal, copy the token, add `CLAUDE_CODE_OAUTH_TOKEN=<token>` to `.env`. Do NOT collect the token in chat.
 
 **API key:** Tell user to add `ANTHROPIC_API_KEY=<key>` to `.env`.
+
+### 4b. Apple Container → Native Credential Proxy
+
+Apple Container is not compatible with OneCLI. The credential proxy code is already included in the apple-container branch — do NOT invoke `/use-native-credential-proxy` (it would conflict with already-applied code).
+
+Instead, just configure the credentials in `.env`:
+
+AskUserQuestion: Do you want to use your **Claude subscription** (Pro/Max) or an **Anthropic API key**?
+
+1. **Claude subscription (Pro/Max)** — description: "Uses your existing Claude Pro or Max subscription. Run `claude setup-token` in another terminal to get your token."
+2. **Anthropic API key** — description: "Pay-per-use API key from console.anthropic.com."
+
+For subscription: tell the user to run `claude setup-token` in another terminal. Stop and wait for the user to confirm they have completed this step successfully before proceeding.
+
+Once confirmed, add the token to `.env`:
+```bash
+echo 'CLAUDE_CODE_OAUTH_TOKEN=<their-token>' >> .env
+```
+
+For API key: add to `.env`:
+```bash
+echo 'ANTHROPIC_API_KEY=<their-key>' >> .env
+```
+
+Verify the proxy starts: `npm run dev` should show "Credential proxy listening" in the logs.
 
 ## 5. Set Up Channels
 
