@@ -279,6 +279,8 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
+  const senderUserId = missedMessages[missedMessages.length - 1].sender;
+
   const output = await runAgent(
     group,
     prompt,
@@ -310,6 +312,7 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
       }
     },
     overrideProvider,
+    senderUserId,
   );
 
   await channel.setTyping?.(chatJid, false);
@@ -344,6 +347,7 @@ async function runAgent(
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
   overrideProvider?: string,
+  senderUserId?: string,
 ): Promise<'success' | 'error'> {
   const isMain = group.isMain === true;
   // New container starting — clear the "session invalidated" flag from any prior /clear
@@ -411,6 +415,7 @@ async function runAgent(
         groupFolder: group.folder,
         chatJid,
         isMain,
+        senderUserId,
         assistantName: ASSISTANT_NAME,
         hostMcpServers:
           Object.keys(hostMcpServers).length > 0 ? hostMcpServers : undefined,

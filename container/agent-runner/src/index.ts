@@ -28,6 +28,7 @@ interface ContainerInput {
   isMain: boolean;
   isScheduledTask?: boolean;
   assistantName?: string;
+  senderUserId?: string;
   script?: string;
   hostMcpServers?: Record<string, { url: string }>;
 }
@@ -427,6 +428,7 @@ async function runQuery(
             NANOCLAW_CHAT_JID: containerInput.chatJid,
             NANOCLAW_GROUP_FOLDER: containerInput.groupFolder,
             NANOCLAW_IS_MAIN: containerInput.isMain ? '1' : '0',
+            NANOCLAW_SENDER_USER_ID: containerInput.senderUserId || '',
           },
         },
         // Host MCP servers proxied via HTTP from the host

@@ -49,6 +49,7 @@ export interface ContainerInput {
   assistantName?: string;
   script?: string;
   hostMcpServers?: Record<string, { url: string }>;
+  senderUserId?: string; // Mattermost user ID of the message sender (for slash command delegation)
   provider?: string; // 'claude' | 'anthropic' | 'google' | 'openai' | 'github-copilot' | 'google-antigravity'
   modelId?: string; // specific model id within the provider
   secrets?: Record<string, string>;

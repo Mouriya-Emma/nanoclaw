@@ -19,6 +19,7 @@ const TASKS_DIR = path.join(IPC_DIR, 'tasks');
 const chatJid = process.env.NANOCLAW_CHAT_JID!;
 const groupFolder = process.env.NANOCLAW_GROUP_FOLDER!;
 const isMain = process.env.NANOCLAW_IS_MAIN === '1';
+const senderUserId = process.env.NANOCLAW_SENDER_USER_ID || '';
 
 function writeIpcFile(dir: string, data: object): string {
   fs.mkdirSync(dir, { recursive: true });
@@ -359,6 +360,51 @@ Use available_groups.json to find the JID for a group. The folder name must be c
 
     return {
       content: [{ type: 'text' as const, text: `Group "${args.name}" registered. It will start receiving messages immediately.` }],
+    };
+  },
+);
+
+server.tool(
+  'execute_command',
+  `Execute a Mattermost slash command on behalf of the user who sent the message.
+The user must have run /delegate in a DM with the bot to authorize this.
+The command executes in the current channel. The result will appear as a message in the channel.
+
+Examples: "/github subscribe owner/repo", "/github me", "/jira create PROJECT"`,
+  {
+    command: z
+      .string()
+      .describe('The slash command starting with /. Example: "/github subscribe owner/repo"'),
+  },
+  async (args) => {
+    if (!args.command.startsWith('/')) {
+      return {
+        content: [{ type: 'text' as const, text: 'Command must start with /.' }],
+        isError: true,
+      };
+    }
+
+    if (!senderUserId) {
+      return {
+        content: [{ type: 'text' as const, text: 'No sender user ID available in this context.' }],
+        isError: true,
+      };
+    }
+
+    // Extract channelId from chatJid (mm:channelId → channelId)
+    const channelId = chatJid.replace(/^mm:/, '');
+
+    writeIpcFile(TASKS_DIR, {
+      type: 'execute_command',
+      command: args.command,
+      userId: senderUserId,
+      channelId,
+      groupFolder,
+      timestamp: new Date().toISOString(),
+    });
+
+    return {
+      content: [{ type: 'text' as const, text: `Slash command "${args.command}" submitted for execution as user. The result will appear in the channel.` }],
     };
   },
 );
