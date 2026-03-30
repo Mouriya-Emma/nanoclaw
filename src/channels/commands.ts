@@ -167,7 +167,10 @@ function handleRequirements(): CommandResult {
   return { text: `Tool requirements:\n\n${lines.join('\n\n')}` };
 }
 
-async function handlePi(args: string, ctx: CommandContext): Promise<CommandResult> {
+async function handlePi(
+  args: string,
+  ctx: CommandContext,
+): Promise<CommandResult> {
   const err = requireGroup(ctx);
   if (err) return err;
 
@@ -257,7 +260,9 @@ export function switchToPiProvider(
   opts.onSetModel?.(jid, provider, restoredModelId);
   opts.onClearSession?.(jid);
   const modelSuffix = restoredModelId ? ` (model: ${restoredModelId})` : '';
-  return { text: `Switched to pi-mono/${provider}${modelSuffix}. Session cleared.` };
+  return {
+    text: `Switched to pi-mono/${provider}${modelSuffix}. Session cleared.`,
+  };
 }
 
 export function switchModel(

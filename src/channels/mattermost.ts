@@ -145,7 +145,8 @@ export class MattermostChannel implements Channel {
       if (msg.includes('401')) {
         return {
           ok: false,
-          error: 'Token expired or revoked. Ask the user to run /delegate again.',
+          error:
+            'Token expired or revoked. Ask the user to run /delegate again.',
         };
       }
       return { ok: false, error: msg };

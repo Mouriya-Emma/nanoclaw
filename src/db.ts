@@ -856,10 +856,7 @@ export function setUserToken(
   ).run(userId, channel, token, new Date().toISOString());
 }
 
-export function deleteUserToken(
-  userId: string,
-  channel = 'mattermost',
-): void {
+export function deleteUserToken(userId: string, channel = 'mattermost'): void {
   db.prepare('DELETE FROM user_tokens WHERE user_id = ? AND channel = ?').run(
     userId,
     channel,
