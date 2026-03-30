@@ -32,6 +32,11 @@ describe('JID ownership patterns', () => {
     const jid = 'tg:-1001234567890';
     expect(jid.startsWith('tg:')).toBe(true);
   });
+
+  it('Mattermost JID: starts with mm:', () => {
+    const jid = 'mm:abc123def456';
+    expect(jid.startsWith('mm:')).toBe(true);
+  });
 });
 
 // --- getAvailableGroups ---

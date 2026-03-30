@@ -27,6 +27,12 @@
     "test:e2e:ipc": "vitest run --config e2e/vitest.workspace.ts --project ipc-tools",
     "test:e2e:hostexec": "vitest run --config e2e/vitest.workspace.ts --project host-exec",
     "test:e2e:session": "vitest run --config e2e/vitest.workspace.ts --project session",
+    "test:e2e:mm": "vitest run --config e2e/vitest.workspace.ts --project mm-commands --project mm-message-flow --project mm-coding --project mm-ipc-tools --project mm-session",
+    "test:e2e:mm:commands": "vitest run --config e2e/vitest.workspace.ts --project mm-commands",
+    "test:e2e:mm:flow": "vitest run --config e2e/vitest.workspace.ts --project mm-message-flow",
+    "test:e2e:mm:coding": "vitest run --config e2e/vitest.workspace.ts --project mm-coding",
+    "test:e2e:mm:ipc": "vitest run --config e2e/vitest.workspace.ts --project mm-ipc-tools",
+    "test:e2e:mm:session": "vitest run --config e2e/vitest.workspace.ts --project mm-session",
     "e2e:auth": "tsx e2e/auth.ts"
   },
   "dependencies": {
@@ -34,12 +40,14 @@
     "@modelcontextprotocol/sdk": "^1.12.1",
     "better-sqlite3": "11.10.0",
     "cron-parser": "5.5.0",
-    "grammy": "^1.41.1"
+    "grammy": "^1.41.1",
+    "ws": "^8.20.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.35.0",
     "@types/better-sqlite3": "^7.6.12",
     "@types/node": "^22.10.0",
+    "@types/ws": "^8.18.1",
     "eslint": "^9.35.0",
     "eslint-plugin-no-catch-all": "^1.1.0",
     "globals": "^15.12.0",

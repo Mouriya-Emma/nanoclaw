@@ -66,6 +66,47 @@ export default defineConfig({
           ...shared,
         },
       },
+      // --- Mattermost E2E ---
+      {
+        test: {
+          name: 'mm-commands',
+          include: ['e2e/mm-commands.test.ts'],
+          testTimeout: 30_000,
+          ...shared,
+        },
+      },
+      {
+        test: {
+          name: 'mm-message-flow',
+          include: ['e2e/mm-message-flow.test.ts'],
+          testTimeout: 200_000,
+          ...shared,
+        },
+      },
+      {
+        test: {
+          name: 'mm-coding',
+          include: ['e2e/mm-coding.test.ts'],
+          testTimeout: 200_000,
+          ...shared,
+        },
+      },
+      {
+        test: {
+          name: 'mm-ipc-tools',
+          include: ['e2e/mm-ipc-tools.test.ts'],
+          testTimeout: 200_000,
+          ...shared,
+        },
+      },
+      {
+        test: {
+          name: 'mm-session',
+          include: ['e2e/mm-session.test.ts'],
+          testTimeout: 300_000,
+          ...shared,
+        },
+      },
     ],
   },
 });

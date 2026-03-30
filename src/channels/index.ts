@@ -5,6 +5,8 @@
 
 // gmail
 
+import './mattermost.js';
+
 // slack
 
 import './telegram.js';
