@@ -369,6 +369,14 @@ function buildContainerArgs(
     'PATH=/opt/host-exec:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
   );
 
+  // Pass Mattermost credentials to container (for mattermost-admin skill)
+  const mmEnv = readEnvFile(['MATTERMOST_URL', 'MATTERMOST_BOT_TOKEN']);
+  const mmUrl = process.env.MATTERMOST_URL || mmEnv.MATTERMOST_URL;
+  const mmToken =
+    process.env.MATTERMOST_BOT_TOKEN || mmEnv.MATTERMOST_BOT_TOKEN;
+  if (mmUrl) args.push('-e', `MATTERMOST_URL=${mmUrl}`);
+  if (mmToken) args.push('-e', `MATTERMOST_BOT_TOKEN=${mmToken}`);
+
   // Run as host user so bind-mounted files are accessible.
   // Skip when running as root (uid 0), as the container's node user (uid 1000),
   // or when getuid is unavailable (native Windows without WSL).
