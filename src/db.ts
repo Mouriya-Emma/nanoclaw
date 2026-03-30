@@ -99,6 +99,13 @@ function createSchema(database: Database.Database): void {
       created_at TEXT NOT NULL,
       UNIQUE(group_folder, tool_name)
     );
+    CREATE TABLE IF NOT EXISTS user_tokens (
+      user_id TEXT NOT NULL,
+      channel TEXT NOT NULL DEFAULT 'mattermost',
+      token TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, channel)
+    );
   `);
 
   // Add last_pi_provider column if it doesn't exist (migration for existing DBs)
@@ -643,18 +650,29 @@ export function deleteModelPreference(groupFolder: string): void {
 
 export function getLastPiProvider(groupFolder: string): string | undefined {
   const row = db
-    .prepare('SELECT last_pi_provider FROM model_preferences WHERE group_folder = ?')
+    .prepare(
+      'SELECT last_pi_provider FROM model_preferences WHERE group_folder = ?',
+    )
     .get(groupFolder) as { last_pi_provider: string | null } | undefined;
   return row?.last_pi_provider || undefined;
 }
 
 /** Get the full last pi-mono preference (provider + modelId). */
-export function getLastPiPreference(groupFolder: string): ModelPreference | undefined {
+export function getLastPiPreference(
+  groupFolder: string,
+): ModelPreference | undefined {
   const row = db
-    .prepare('SELECT last_pi_provider, last_pi_model_id FROM model_preferences WHERE group_folder = ?')
-    .get(groupFolder) as { last_pi_provider: string | null; last_pi_model_id: string | null } | undefined;
+    .prepare(
+      'SELECT last_pi_provider, last_pi_model_id FROM model_preferences WHERE group_folder = ?',
+    )
+    .get(groupFolder) as
+    | { last_pi_provider: string | null; last_pi_model_id: string | null }
+    | undefined;
   if (!row?.last_pi_provider) return undefined;
-  return { provider: row.last_pi_provider, modelId: row.last_pi_model_id || undefined };
+  return {
+    provider: row.last_pi_provider,
+    modelId: row.last_pi_model_id || undefined,
+  };
 }
 
 export function setLastPiProvider(groupFolder: string, provider: string): void {
@@ -667,7 +685,11 @@ export function setLastPiProvider(groupFolder: string, provider: string): void {
 }
 
 /** Save the full pi-mono preference (provider + modelId) for later restoration. */
-export function setLastPiPreference(groupFolder: string, provider: string, modelId?: string): void {
+export function setLastPiPreference(
+  groupFolder: string,
+  provider: string,
+  modelId?: string,
+): void {
   db.prepare(
     `INSERT INTO model_preferences (group_folder, provider, last_pi_provider, last_pi_model_id)
      VALUES (?, 'claude', ?, ?)
@@ -809,6 +831,39 @@ export function getToolRequirements(groupFolder?: string): ToolRequirement[] {
   return db
     .prepare('SELECT * FROM tool_requirements ORDER BY created_at DESC')
     .all() as ToolRequirement[];
+}
+
+// --- User token accessors ---
+
+export function getUserToken(
+  userId: string,
+  channel = 'mattermost',
+): string | undefined {
+  const row = db
+    .prepare('SELECT token FROM user_tokens WHERE user_id = ? AND channel = ?')
+    .get(userId, channel) as { token: string } | undefined;
+  return row?.token;
+}
+
+export function setUserToken(
+  userId: string,
+  channel: string,
+  token: string,
+): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO user_tokens (user_id, channel, token, created_at)
+     VALUES (?, ?, ?, ?)`,
+  ).run(userId, channel, token, new Date().toISOString());
+}
+
+export function deleteUserToken(
+  userId: string,
+  channel = 'mattermost',
+): void {
+  db.prepare('DELETE FROM user_tokens WHERE user_id = ? AND channel = ?').run(
+    userId,
+    channel,
+  );
 }
 
 // --- JSON migration ---

@@ -3,7 +3,11 @@ import { EventEmitter } from 'events';
 
 import { MattermostChannel } from './mattermost.js';
 
-type MockWs = EventEmitter & { send: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn>; readyState: number };
+type MockWs = EventEmitter & {
+  send: ReturnType<typeof vi.fn>;
+  close: ReturnType<typeof vi.fn>;
+  readyState: number;
+};
 
 // --- Mocks ---
 
@@ -228,9 +232,7 @@ describe('MattermostChannel', () => {
     it('skips own messages', async () => {
       wsInstance.emit(
         'message',
-        Buffer.from(
-          makeWsPostedEvent({ user_id: 'bot123' }),
-        ),
+        Buffer.from(makeWsPostedEvent({ user_id: 'bot123' })),
       );
       await new Promise((r) => setTimeout(r, 50));
 
@@ -240,9 +242,7 @@ describe('MattermostChannel', () => {
     it('skips system messages', async () => {
       wsInstance.emit(
         'message',
-        Buffer.from(
-          makeWsPostedEvent({ type: 'system_join_channel' }),
-        ),
+        Buffer.from(makeWsPostedEvent({ type: 'system_join_channel' })),
       );
       await new Promise((r) => setTimeout(r, 50));
 

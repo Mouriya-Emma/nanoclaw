@@ -70,15 +70,24 @@ vi.mock('./mcp-proxy.js', () => ({
 vi.mock('./container-runtime.js', () => ({
   CONTAINER_HOST_GATEWAY: 'host-gateway',
   CONTAINER_RUNTIME_BIN: 'docker',
-  hostGatewayArgs: vi.fn(() => ['--add-host=host.docker.internal:host-gateway']),
-  readonlyMountArgs: vi.fn((host: string, container: string) => ['-v', `${host}:${container}:ro`]),
+  hostGatewayArgs: vi.fn(() => [
+    '--add-host=host.docker.internal:host-gateway',
+  ]),
+  readonlyMountArgs: vi.fn((host: string, container: string) => [
+    '-v',
+    `${host}:${container}:ro`,
+  ]),
   stopContainer: vi.fn((name: string) => `docker stop ${name}`),
 }));
 
 // Mock group-folder
 vi.mock('./group-folder.js', () => ({
-  resolveGroupFolderPath: vi.fn((folder: string) => `/tmp/nanoclaw-test-groups/${folder}`),
-  resolveGroupIpcPath: vi.fn((folder: string) => `/tmp/nanoclaw-test-ipc/${folder}`),
+  resolveGroupFolderPath: vi.fn(
+    (folder: string) => `/tmp/nanoclaw-test-groups/${folder}`,
+  ),
+  resolveGroupIpcPath: vi.fn(
+    (folder: string) => `/tmp/nanoclaw-test-ipc/${folder}`,
+  ),
 }));
 
 // Mock env

@@ -315,6 +315,31 @@ curl -s "$MATTERMOST_URL/api/v4/teams/TEAM_ID/channels/name/town-square" \
 
 ---
 
+## 代替用户执行 Slash Commands
+
+通过 IPC 机制可以代替用户执行 Mattermost 斜杠命令（如 `/github subscribe owner/repo`）。
+用户必须先在与 bot 的私聊中执行 `/delegate` 授权后才能使用此功能。
+
+```bash
+# 以用户身份执行斜杠命令
+cat > /workspace/ipc/messages/$(date +%s%N)-cmd.json <<EOF
+{
+  "type": "execute_command",
+  "userId": "USER_MATTERMOST_ID",
+  "command": "/github subscribe owner/repo",
+  "channelId": "TARGET_CHANNEL_ID"
+}
+EOF
+```
+
+- `userId`: 发起请求的用户的 Mattermost ID（从消息 sender 字段获取）
+- `command`: 完整的斜杠命令，必须以 `/` 开头
+- `channelId`: 在哪个频道执行命令（从 chat_jid 去掉 `mm:` 前缀获取）
+
+执行结果会自动发送到对应频道。如果用户未授权，会返回错误提示。
+
+---
+
 ## 注意事项
 
 - `channel.name` 必须全小写、字母数字连字符，≤64 字符

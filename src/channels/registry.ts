@@ -1,5 +1,6 @@
 import {
   Channel,
+  ModelPreference,
   OnInboundMessage,
   OnChatMetadata,
   RegisteredGroup,
@@ -13,6 +14,8 @@ export interface ChannelOpts {
   onRegisterGroup?: (jid: string, group: RegisteredGroup) => void;
   onClearSession?: (jid: string) => void;
   onStopContainer?: (jid: string) => void;
+  onSetModel?: (jid: string, provider: string, modelId?: string) => void;
+  onGetModel?: (jid: string) => ModelPreference;
 }
 
 export type ChannelFactory = (opts: ChannelOpts) => Channel | null;

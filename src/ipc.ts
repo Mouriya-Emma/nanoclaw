@@ -29,6 +29,11 @@ export interface IpcDeps {
     registeredJids: Set<string>,
   ) => void;
   onTasksChanged: () => void;
+  executeSlashCommand?: (
+    userId: string,
+    command: string,
+    channelId: string,
+  ) => Promise<{ ok: boolean; response?: string; error?: string }>;
 }
 
 let ipcWatcherRunning = false;
@@ -184,6 +189,10 @@ export async function processTaskIpc(
     reason?: string;
     needsAuth?: boolean;
     authProvider?: string;
+    // For execute_command
+    command?: string;
+    channelId?: string;
+    userId?: string;
   },
   sourceGroup: string, // Verified identity from IPC directory
   isMain: boolean, // Verified from directory path
@@ -452,9 +461,9 @@ export async function processTaskIpc(
           );
           break;
         }
-        // Defense in depth: agent cannot set isMain via IPC.                                                                                                                                    
-        // Preserve isMain from the existing registration so IPC config                                                                                                                          
-        // updates (e.g. adding additionalMounts) don't strip the flag.                                                                                                                          
+        // Defense in depth: agent cannot set isMain via IPC.
+        // Preserve isMain from the existing registration so IPC config
+        // updates (e.g. adding additionalMounts) don't strip the flag.
         const existingGroup = registeredGroups[data.jid];
         deps.registerGroup(data.jid, {
           name: data.name,
@@ -485,6 +494,55 @@ export async function processTaskIpc(
         logger.info(
           { tool: data.tool, sourceGroup },
           'Tool requirement recorded via IPC',
+        );
+      }
+      break;
+
+    case 'execute_command':
+      if (data.command && data.channelId && data.userId) {
+        if (!deps.executeSlashCommand) {
+          logger.warn(
+            { sourceGroup },
+            'execute_command IPC received but no handler configured',
+          );
+          break;
+        }
+        const cmdResult = await deps.executeSlashCommand(
+          data.userId,
+          data.command,
+          data.channelId,
+        );
+        if (cmdResult.ok) {
+          logger.info(
+            { command: data.command, userId: data.userId, sourceGroup },
+            'Slash command executed via user token',
+          );
+          // Send the command response back to the channel
+          if (cmdResult.response) {
+            const targetJid = `mm:${data.channelId}`;
+            await deps.sendMessage(targetJid, cmdResult.response);
+          }
+        } else {
+          logger.warn(
+            {
+              command: data.command,
+              userId: data.userId,
+              error: cmdResult.error,
+              sourceGroup,
+            },
+            'Slash command execution failed',
+          );
+          // Notify the channel about the failure
+          const targetJid = `mm:${data.channelId}`;
+          await deps.sendMessage(
+            targetJid,
+            `Failed to execute \`${data.command}\`: ${cmdResult.error}`,
+          );
+        }
+      } else {
+        logger.warn(
+          { data, sourceGroup },
+          'execute_command IPC missing required fields (command, channelId, userId)',
         );
       }
       break;

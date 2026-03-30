@@ -54,15 +54,21 @@ export const PI_CONTAINER_IMAGE =
 // but some can also fall back to API keys when available.
 export const PROVIDER_SECRET_KEYS: Record<string, string[]> = {
   claude: ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN'],
-  anthropic: [],                 // pi-mono: OAuth only
-  google: ['GOOGLE_API_KEY'],    // pi-mono: OAuth or API key
-  openai: ['OPENAI_API_KEY'],    // pi-mono: OAuth or API key
-  'github-copilot': [],          // pi-mono: OAuth only
-  'google-antigravity': [],      // pi-mono: OAuth only
+  anthropic: [], // pi-mono: OAuth only
+  google: ['GOOGLE_API_KEY'], // pi-mono: OAuth or API key
+  openai: ['OPENAI_API_KEY'], // pi-mono: OAuth or API key
+  'github-copilot': [], // pi-mono: OAuth only
+  'google-antigravity': [], // pi-mono: OAuth only
 };
 
 // All valid pi-mono provider names (used by /pi command)
-export const PI_PROVIDERS = ['anthropic', 'google', 'openai', 'github-copilot', 'google-antigravity'] as const;
+export const PI_PROVIDERS = [
+  'anthropic',
+  'google',
+  'openai',
+  'github-copilot',
+  'google-antigravity',
+] as const;
 export const CONTAINER_TIMEOUT = parseInt(
   process.env.CONTAINER_TIMEOUT || '1800000',
   10,

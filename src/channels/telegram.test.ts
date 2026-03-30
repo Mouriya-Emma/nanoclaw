@@ -7,7 +7,13 @@ vi.mock('../config.js', () => ({
   ASSISTANT_NAME: 'Andy',
   DATA_DIR: '/tmp/nanoclaw-test-data',
   TRIGGER_PATTERN: /^@Andy\b/i,
-  PI_PROVIDERS: ['anthropic', 'google', 'openai', 'github-copilot', 'google-antigravity'],
+  PI_PROVIDERS: [
+    'anthropic',
+    'google',
+    'openai',
+    'github-copilot',
+    'google-antigravity',
+  ],
 }));
 
 // Mock auth-manager
@@ -26,12 +32,15 @@ vi.mock('../auth-manager.js', () => ({
 }));
 
 // Mock db (getLastPiPreference, setLastPiPreference, getToolRequirements)
-const mockGetLastPiPreference = vi.fn<(folder: string) => { provider: string; modelId?: string } | undefined>(() => undefined);
+const mockGetLastPiPreference = vi.fn<
+  (folder: string) => { provider: string; modelId?: string } | undefined
+>(() => undefined);
 const mockSetLastPiPreference = vi.fn();
 const mockGetToolRequirements = vi.fn(() => []);
 vi.mock('../db.js', () => ({
   getLastPiPreference: (folder: string) => mockGetLastPiPreference(folder),
-  setLastPiPreference: (folder: string, provider: string, modelId?: string) => mockSetLastPiPreference(folder, provider, modelId),
+  setLastPiPreference: (folder: string, provider: string, modelId?: string) =>
+    mockSetLastPiPreference(folder, provider, modelId),
   getToolRequirements: () => mockGetToolRequirements(),
 }));
 
@@ -91,23 +100,21 @@ vi.mock('grammy', () => ({
   },
   InlineKeyboard: class MockInlineKeyboard {
     rows: any[] = [];
-    text(_label: string, _data: string) { return this; }
-    row() { return this; }
+    text(_label: string, _data: string) {
+      return this;
+    }
+    row() {
+      return this;
+    }
   },
 }));
 
-import {
-  TelegramChannel,
-  TelegramChannelOpts,
-  buildJid,
-  parseJid,
-} from './telegram.js';
+import { TelegramChannel, buildJid, parseJid } from './telegram.js';
+import { ChannelOpts } from './registry.js';
 
 // --- Test helpers ---
 
-function createTestOpts(
-  overrides?: Partial<TelegramChannelOpts>,
-): TelegramChannelOpts {
+function createTestOpts(overrides?: Partial<ChannelOpts>): ChannelOpts {
   return {
     onMessage: vi.fn(),
     onChatMetadata: vi.fn(),
@@ -1003,9 +1010,17 @@ describe('TelegramChannel', () => {
       const handler = currentBot().commandHandlers.get('pi')!;
       await handler(createCommandCtx('anthropic'));
 
-      expect(opts.onSetModel).toHaveBeenCalledWith('tg:100200300', 'anthropic', undefined);
+      expect(opts.onSetModel).toHaveBeenCalledWith(
+        'tg:100200300',
+        'anthropic',
+        undefined,
+      );
       expect(opts.onClearSession).toHaveBeenCalledWith('tg:100200300');
-      expect(mockSetLastPiPreference).toHaveBeenCalledWith('test-group', 'anthropic', undefined);
+      expect(mockSetLastPiPreference).toHaveBeenCalledWith(
+        'test-group',
+        'anthropic',
+        undefined,
+      );
     });
 
     it('/pi google switches to google provider', async () => {
@@ -1016,7 +1031,11 @@ describe('TelegramChannel', () => {
       const handler = currentBot().commandHandlers.get('pi')!;
       await handler(createCommandCtx('google'));
 
-      expect(opts.onSetModel).toHaveBeenCalledWith('tg:100200300', 'google', undefined);
+      expect(opts.onSetModel).toHaveBeenCalledWith(
+        'tg:100200300',
+        'google',
+        undefined,
+      );
       expect(opts.onClearSession).toHaveBeenCalled();
     });
 
@@ -1058,7 +1077,9 @@ describe('TelegramChannel', () => {
       await handler(ctx);
 
       expect(opts.onSetModel).not.toHaveBeenCalled();
-      expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('No authenticated'));
+      expect(ctx.reply).toHaveBeenCalledWith(
+        expect.stringContaining('No authenticated'),
+      );
     });
 
     it('/pi invalid rejects unknown provider', async () => {
@@ -1071,7 +1092,9 @@ describe('TelegramChannel', () => {
       await handler(ctx);
 
       expect(opts.onSetModel).not.toHaveBeenCalled();
-      expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('Unknown pi-mono provider'));
+      expect(ctx.reply).toHaveBeenCalledWith(
+        expect.stringContaining('Unknown pi-mono provider'),
+      );
     });
 
     it('/pi rejects unregistered chat', async () => {
@@ -1156,12 +1179,19 @@ describe('TelegramChannel', () => {
       const handler = currentBot().commandHandlers.get('model')!;
       await handler(createCommandCtx('gemini-2.5-flash'));
 
-      expect(opts.onSetModel).toHaveBeenCalledWith('tg:100200300', 'google', 'gemini-2.5-flash');
+      expect(opts.onSetModel).toHaveBeenCalledWith(
+        'tg:100200300',
+        'google',
+        'gemini-2.5-flash',
+      );
     });
 
     it('/model preserves current provider (does not switch runtime)', async () => {
       const opts = createTestOpts({
-        onGetModel: vi.fn(() => ({ provider: 'anthropic', modelId: 'old-model' })),
+        onGetModel: vi.fn(() => ({
+          provider: 'anthropic',
+          modelId: 'old-model',
+        })),
         onSetModel: vi.fn(),
         onClearSession: vi.fn(),
       });
@@ -1171,14 +1201,21 @@ describe('TelegramChannel', () => {
       const handler = currentBot().commandHandlers.get('model')!;
       await handler(createCommandCtx('claude-sonnet-4'));
 
-      expect(opts.onSetModel).toHaveBeenCalledWith('tg:100200300', 'anthropic', 'claude-sonnet-4');
+      expect(opts.onSetModel).toHaveBeenCalledWith(
+        'tg:100200300',
+        'anthropic',
+        'claude-sonnet-4',
+      );
       // Does NOT clear session
       expect(opts.onClearSession).not.toHaveBeenCalled();
     });
 
     it('/model without args shows current status', async () => {
       const opts = createTestOpts({
-        onGetModel: vi.fn(() => ({ provider: 'google', modelId: 'gemini-2.5-flash' })),
+        onGetModel: vi.fn(() => ({
+          provider: 'google',
+          modelId: 'gemini-2.5-flash',
+        })),
         onSetModel: vi.fn(),
       });
       const channel = new TelegramChannel('test-token', opts);
@@ -1283,7 +1320,9 @@ describe('TelegramChannel', () => {
       await handler(ctx);
 
       expect(opts.onMessage).not.toHaveBeenCalled();
-      expect(ctx.reply).toHaveBeenCalledWith(expect.stringContaining('Unknown provider'));
+      expect(ctx.reply).toHaveBeenCalledWith(
+        expect.stringContaining('Unknown provider'),
+      );
     });
   });
 

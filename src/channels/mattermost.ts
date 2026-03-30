@@ -1,9 +1,11 @@
 import WebSocket from 'ws';
 
-import { ASSISTANT_NAME, TRIGGER_PATTERN } from '../config.js';
+import { TRIGGER_PATTERN } from '../config.js';
+import { deleteUserToken, getUserToken, setUserToken } from '../db.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { Channel } from '../types.js';
+import { handleSharedCommand } from './commands.js';
 import { registerChannel, ChannelOpts } from './registry.js';
 
 // --- Mattermost API types ---
@@ -90,6 +92,64 @@ export class MattermostChannel implements Channel {
     }
 
     return response.json() as T;
+  }
+
+  private async apiWithToken<T>(
+    endpoint: string,
+    token: string,
+    options: RequestInit = {},
+  ): Promise<T> {
+    const response = await fetch(`${this.baseUrl}/api/v4${endpoint}`, {
+      ...options,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+    });
+
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`Mattermost API error: ${response.status} ${error}`);
+    }
+
+    return response.json() as T;
+  }
+
+  async executeSlashCommand(
+    userId: string,
+    command: string,
+    channelId: string,
+  ): Promise<{ ok: boolean; response?: string; error?: string }> {
+    const token = getUserToken(userId, 'mattermost');
+    if (!token) {
+      return {
+        ok: false,
+        error:
+          'No token stored for this user. Ask them to run /delegate in a DM first.',
+      };
+    }
+
+    try {
+      const result = await this.apiWithToken<{
+        response_type?: string;
+        text?: string;
+      }>('/commands/execute', token, {
+        method: 'POST',
+        body: JSON.stringify({ channel_id: channelId, command }),
+      });
+      return { ok: true, response: result.text || 'Command executed' };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // Token might be revoked
+      if (msg.includes('401')) {
+        return {
+          ok: false,
+          error: 'Token expired or revoked. Ask the user to run /delegate again.',
+        };
+      }
+      return { ok: false, error: msg };
+    }
   }
 
   private async getUser(userId: string): Promise<MattermostUser> {
@@ -264,7 +324,13 @@ export class MattermostChannel implements Channel {
       channelInfo?.type === 'G';
 
     // Store chat metadata
-    this.opts.onChatMetadata(chatJid, timestamp, channelName, 'mattermost', isGroup);
+    this.opts.onChatMetadata(
+      chatJid,
+      timestamp,
+      channelName,
+      'mattermost',
+      isGroup,
+    );
 
     // Handle commands (messages starting with /)
     if (post.message.startsWith('/')) {
@@ -314,7 +380,35 @@ export class MattermostChannel implements Channel {
   ): Promise<void> {
     const parts = post.message.split(/\s+/);
     const cmd = parts[0].toLowerCase();
+    const args = post.message.slice(cmd.length).trim();
 
+    // Try shared command handler first
+    const group = this.opts.registeredGroups()[chatJid] || null;
+    const user = await this.getUser(post.user_id);
+    const result = await handleSharedCommand(cmd, args, {
+      chatJid,
+      userId: post.user_id,
+      senderName: user.first_name || user.username || 'unknown',
+      channelName: 'mattermost',
+      timestamp: new Date(post.create_at).toISOString(),
+      messageId: post.id,
+      group,
+      opts: this.opts,
+    });
+
+    if (result) {
+      let text = result.text;
+      if (result.choices) {
+        text = result.choicePrompt || result.text;
+        text +=
+          '\n' +
+          result.choices.map((c, i) => `${i + 1}. ${c.label}`).join('\n');
+      }
+      await this.sendToChannel(post.channel_id, text);
+      return;
+    }
+
+    // Channel-specific commands
     switch (cmd) {
       case '/chatid': {
         const channelInfo = await this.getChannelInfo(post.channel_id);
@@ -337,41 +431,92 @@ export class MattermostChannel implements Channel {
         break;
       }
 
-      case '/ping':
-        await this.sendToChannel(
-          post.channel_id,
-          `${ASSISTANT_NAME} is online.`,
-        );
-        break;
-
-      case '/clear': {
-        const group = this.opts.registeredGroups()[chatJid];
-        if (!group) {
+      case '/delegate': {
+        // Only accept token submission in DM channels
+        const authChannelInfo = await this.getChannelInfo(post.channel_id);
+        if (!authChannelInfo || authChannelInfo.type !== 'D') {
           await this.sendToChannel(
             post.channel_id,
-            'This channel is not registered.',
+            'Please send `/delegate` in a **direct message** to me for security.',
           );
           return;
         }
-        this.opts.onClearSession?.(chatJid);
-        await this.sendToChannel(
-          post.channel_id,
-          'Session cleared. Next message starts a fresh conversation.',
-        );
+
+        const token = parts[1];
+        if (!token) {
+          await this.sendToChannel(
+            post.channel_id,
+            [
+              'To delegate slash command execution, I need your Mattermost **Personal Access Token**.',
+              '',
+              '1. Go to your profile picture → **Profile** → **Security** → **Personal Access Tokens**',
+              '2. Click **Create Token**, give it a description like "andy-bot delegation"',
+              '3. Copy the **Token ID** (not the Access Token ID) and send:',
+              '```',
+              '/delegate <your-token>',
+              '```',
+              '',
+              'Your token will be stored securely and only used to execute slash commands on your behalf.',
+            ].join('\n'),
+          );
+          return;
+        }
+
+        // Validate token by calling /users/me
+        try {
+          const tokenUser = await this.apiWithToken<MattermostUser>(
+            '/users/me',
+            token,
+          );
+          // Verify token belongs to the sender
+          if (tokenUser.id !== post.user_id) {
+            await this.sendToChannel(
+              post.channel_id,
+              'This token does not belong to you.',
+            );
+            return;
+          }
+
+          setUserToken(post.user_id, 'mattermost', token);
+
+          // Delete the message containing the token for security
+          try {
+            await this.api(`/posts/${post.id}`, { method: 'DELETE' });
+          } catch {
+            // Bot may lack permission; warn user
+            await this.sendToChannel(
+              post.channel_id,
+              'Could not auto-delete your token message. Please delete it manually.',
+            );
+          }
+
+          await this.sendToChannel(
+            post.channel_id,
+            `Token stored for **${tokenUser.username}**. I can now execute slash commands on your behalf.`,
+          );
+          logger.info(
+            { userId: post.user_id, username: tokenUser.username },
+            'User token stored for slash command delegation',
+          );
+        } catch {
+          await this.sendToChannel(
+            post.channel_id,
+            'Invalid token. Please check and try again.',
+          );
+        }
         break;
       }
 
-      case '/stop': {
-        const group = this.opts.registeredGroups()[chatJid];
-        if (!group) {
-          await this.sendToChannel(
-            post.channel_id,
-            'This channel is not registered.',
-          );
-          return;
-        }
-        this.opts.onStopContainer?.(chatJid);
-        await this.sendToChannel(post.channel_id, 'Container stopped.');
+      case '/revoke': {
+        deleteUserToken(post.user_id, 'mattermost');
+        await this.sendToChannel(
+          post.channel_id,
+          'Your token has been revoked. I can no longer execute slash commands on your behalf.',
+        );
+        logger.info(
+          { userId: post.user_id },
+          'User token revoked for slash command delegation',
+        );
         break;
       }
     }
@@ -379,10 +524,7 @@ export class MattermostChannel implements Channel {
 
   // --- Send messages ---
 
-  private async sendToChannel(
-    channelId: string,
-    text: string,
-  ): Promise<void> {
+  private async sendToChannel(channelId: string, text: string): Promise<void> {
     await this.api('/posts', {
       method: 'POST',
       body: JSON.stringify({ channel_id: channelId, message: text }),
@@ -422,9 +564,7 @@ export class MattermostChannel implements Channel {
   // --- Channel interface ---
 
   isConnected(): boolean {
-    return (
-      this.connected && this.ws?.readyState === WebSocket.OPEN
-    );
+    return this.connected && this.ws?.readyState === WebSocket.OPEN;
   }
 
   ownsJid(jid: string): boolean {

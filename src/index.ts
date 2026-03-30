@@ -16,6 +16,7 @@ import {
 } from './config.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
+import { MattermostChannel } from './channels/mattermost.js';
 import {
   getChannelFactory,
   getRegisteredChannelNames,
@@ -766,6 +767,15 @@ async function main(): Promise<void> {
     getAvailableGroups,
     writeGroupsSnapshot: (gf, im, ag, rj) =>
       writeGroupsSnapshot(gf, im, ag, rj),
+    executeSlashCommand: async (userId, command, channelId) => {
+      const mmChannel = channels.find((c) => c.name === 'mattermost') as
+        | MattermostChannel
+        | undefined;
+      if (!mmChannel) {
+        return { ok: false, error: 'Mattermost channel not connected' };
+      }
+      return mmChannel.executeSlashCommand(userId, command, channelId);
+    },
     onTasksChanged: () => {
       const tasks = getAllTasks();
       const taskRows = tasks.map((t) => ({
