@@ -20,13 +20,79 @@ import {
 } from './platform.js';
 import { emitStatus } from './status.js';
 
-export async function run(_args: string[]): Promise<void> {
+export interface ServiceFlags {
+  mode: 'full' | 'rehydrate';
+  preserveUnit: boolean;
+  noKill: boolean;
+  skipIfRunning: boolean;
+}
+
+// Rehydrate mode is used when the CT is rebuilt but the application state
+// (unit files, running service, on-disk groups) survives on a bind mount.
+// See issue #2 (Mouriya-Emma/nanoclaw) and homelab-tf#63/#64.
+export function parseServiceArgs(args: string[]): ServiceFlags {
+  let mode: 'full' | 'rehydrate' = 'full';
+  let preserveUnit = false;
+  let noKill = false;
+  let skipIfRunning = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--mode' && args[i + 1]) {
+      const v = args[i + 1];
+      if (v === 'rehydrate' || v === 'full') {
+        mode = v;
+      }
+      i++;
+    } else if (a.startsWith('--mode=')) {
+      const v = a.slice('--mode='.length);
+      if (v === 'rehydrate' || v === 'full') {
+        mode = v;
+      }
+    } else if (a === '--preserve-unit') {
+      preserveUnit = true;
+    } else if (a === '--no-kill') {
+      noKill = true;
+    } else if (a === '--skip-if-running') {
+      skipIfRunning = true;
+    }
+  }
+
+  if (mode === 'rehydrate') {
+    preserveUnit = true;
+    noKill = true;
+    skipIfRunning = true;
+  }
+
+  return { mode, preserveUnit, noKill, skipIfRunning };
+}
+
+// Write a unit/plist file, honoring --preserve-unit semantics.
+// Returns what was done so the caller can emit accurate status.
+export function writeUnitFileIfNeeded(
+  unitPath: string,
+  content: string,
+  flags: ServiceFlags,
+): { written: boolean; preservedExisting: boolean } {
+  const exists = fs.existsSync(unitPath);
+  if (flags.preserveUnit && exists) {
+    return { written: false, preservedExisting: true };
+  }
+  fs.writeFileSync(unitPath, content);
+  return { written: true, preservedExisting: false };
+}
+
+export async function run(args: string[]): Promise<void> {
   const projectRoot = process.cwd();
   const platform = getPlatform();
   const nodePath = getNodePath();
   const homeDir = os.homedir();
+  const flags = parseServiceArgs(args);
 
-  logger.info({ platform, nodePath, projectRoot }, 'Setting up service');
+  logger.info(
+    { platform, nodePath, projectRoot, flags },
+    'Setting up service',
+  );
 
   // Build first
   logger.info('Building TypeScript');
@@ -52,9 +118,9 @@ export async function run(_args: string[]): Promise<void> {
   fs.mkdirSync(path.join(projectRoot, 'logs'), { recursive: true });
 
   if (platform === 'macos') {
-    setupLaunchd(projectRoot, nodePath, homeDir);
+    setupLaunchd(projectRoot, nodePath, homeDir, flags);
   } else if (platform === 'linux') {
-    setupLinux(projectRoot, nodePath, homeDir);
+    setupLinux(projectRoot, nodePath, homeDir, flags);
   } else {
     emitStatus('SETUP_SERVICE', {
       SERVICE_TYPE: 'unknown',
@@ -72,6 +138,7 @@ function setupLaunchd(
   projectRoot: string,
   nodePath: string,
   homeDir: string,
+  flags: ServiceFlags,
 ): void {
   const plistPath = path.join(
     homeDir,
@@ -112,20 +179,40 @@ function setupLaunchd(
 </dict>
 </plist>`;
 
-  fs.writeFileSync(plistPath, plist);
-  logger.info({ plistPath }, 'Wrote launchd plist');
+  const plistResult = writeUnitFileIfNeeded(plistPath, plist, flags);
+  if (plistResult.preservedExisting) {
+    logger.info(
+      { plistPath },
+      'Preserving existing launchd plist (rehydrate mode)',
+    );
+  } else {
+    logger.info({ plistPath }, 'Wrote launchd plist');
+  }
 
+  // Check if already loaded before deciding whether to load
+  let alreadyLoaded = false;
   try {
-    execSync(`launchctl load ${JSON.stringify(plistPath)}`, {
-      stdio: 'ignore',
-    });
-    logger.info('launchctl load succeeded');
+    const output = execSync('launchctl list', { encoding: 'utf-8' });
+    alreadyLoaded = output.includes('com.nanoclaw');
   } catch {
-    logger.warn('launchctl load failed (may already be loaded)');
+    // launchctl list failed — treat as not loaded
+  }
+
+  if (flags.skipIfRunning && alreadyLoaded) {
+    logger.info('launchd service already loaded — skipping load (rehydrate mode)');
+  } else {
+    try {
+      execSync(`launchctl load ${JSON.stringify(plistPath)}`, {
+        stdio: 'ignore',
+      });
+      logger.info('launchctl load succeeded');
+    } catch {
+      logger.warn('launchctl load failed (may already be loaded)');
+    }
   }
 
   // Verify
-  let serviceLoaded = false;
+  let serviceLoaded = alreadyLoaded;
   try {
     const output = execSync('launchctl list', { encoding: 'utf-8' });
     serviceLoaded = output.includes('com.nanoclaw');
@@ -139,6 +226,8 @@ function setupLaunchd(
     PROJECT_PATH: projectRoot,
     PLIST_PATH: plistPath,
     SERVICE_LOADED: serviceLoaded,
+    MODE: flags.mode,
+    PLIST_PRESERVED: plistResult.preservedExisting,
     STATUS: 'success',
     LOG: 'logs/setup.log',
   });
@@ -148,14 +237,15 @@ function setupLinux(
   projectRoot: string,
   nodePath: string,
   homeDir: string,
+  flags: ServiceFlags,
 ): void {
   const serviceManager = getServiceManager();
 
   if (serviceManager === 'systemd') {
-    setupSystemd(projectRoot, nodePath, homeDir);
+    setupSystemd(projectRoot, nodePath, homeDir, flags);
   } else {
     // WSL without systemd or other Linux without systemd
-    setupNohupFallback(projectRoot, nodePath, homeDir);
+    setupNohupFallback(projectRoot, nodePath, homeDir, flags);
   }
 }
 
@@ -205,6 +295,7 @@ function setupSystemd(
   projectRoot: string,
   nodePath: string,
   homeDir: string,
+  flags: ServiceFlags,
 ): void {
   const runningAsRoot = isRoot();
 
@@ -224,7 +315,7 @@ function setupSystemd(
       logger.warn(
         'systemd user session not available — falling back to nohup wrapper',
       );
-      setupNohupFallback(projectRoot, nodePath, homeDir);
+      setupNohupFallback(projectRoot, nodePath, homeDir, flags);
       return;
     }
     const unitDir = path.join(homeDir, '.config', 'systemd', 'user');
@@ -252,8 +343,15 @@ StandardError=append:${projectRoot}/logs/nanoclaw.error.log
 [Install]
 WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
 
-  fs.writeFileSync(unitPath, unit);
-  logger.info({ unitPath }, 'Wrote systemd unit');
+  const unitResult = writeUnitFileIfNeeded(unitPath, unit, flags);
+  if (unitResult.preservedExisting) {
+    logger.info(
+      { unitPath },
+      'Preserving existing systemd unit (rehydrate mode)',
+    );
+  } else {
+    logger.info({ unitPath }, 'Wrote systemd unit');
+  }
 
   // Detect stale docker group before starting (user systemd only)
   const dockerGroupStale = !runningAsRoot && checkDockerGroupStale();
@@ -263,8 +361,14 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
     );
   }
 
-  // Kill orphaned nanoclaw processes to avoid channel connection conflicts
-  killOrphanedProcesses(projectRoot);
+  // Kill orphaned nanoclaw processes to avoid channel connection conflicts.
+  // In rehydrate mode, skip — we want to preserve the running service across
+  // a CT rebuild or a follow-up `/setup` run for other steps.
+  if (flags.noKill) {
+    logger.info('Skipping orphan process kill (rehydrate mode)');
+  } else {
+    killOrphanedProcesses(projectRoot);
+  }
 
   // Enable lingering so the user service survives SSH logout.
   // Without linger, systemd terminates all user processes when the last session closes.
@@ -280,7 +384,7 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
     }
   }
 
-  // Enable and start
+  // daemon-reload is always safe and needed if unit was written
   try {
     execSync(`${systemctlPrefix} daemon-reload`, { stdio: 'ignore' });
   } catch (err) {
@@ -293,14 +397,27 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
     logger.error({ err }, 'systemctl enable failed');
   }
 
+  // Check if already active before starting
+  let alreadyActive = false;
   try {
-    execSync(`${systemctlPrefix} start nanoclaw`, { stdio: 'ignore' });
-  } catch (err) {
-    logger.error({ err }, 'systemctl start failed');
+    execSync(`${systemctlPrefix} is-active nanoclaw`, { stdio: 'ignore' });
+    alreadyActive = true;
+  } catch {
+    // Not active
   }
 
-  // Verify
-  let serviceLoaded = false;
+  if (flags.skipIfRunning && alreadyActive) {
+    logger.info('systemd service already active — skipping start (rehydrate mode)');
+  } else {
+    try {
+      execSync(`${systemctlPrefix} start nanoclaw`, { stdio: 'ignore' });
+    } catch (err) {
+      logger.error({ err }, 'systemctl start failed');
+    }
+  }
+
+  // Verify (re-check; start may have just happened)
+  let serviceLoaded = alreadyActive;
   try {
     execSync(`${systemctlPrefix} is-active nanoclaw`, { stdio: 'ignore' });
     serviceLoaded = true;
@@ -316,6 +433,8 @@ WantedBy=${runningAsRoot ? 'multi-user.target' : 'default.target'}`;
     SERVICE_LOADED: serviceLoaded,
     ...(dockerGroupStale ? { DOCKER_GROUP_STALE: true } : {}),
     LINGER_ENABLED: !runningAsRoot,
+    MODE: flags.mode,
+    UNIT_PRESERVED: unitResult.preservedExisting,
     STATUS: 'success',
     LOG: 'logs/setup.log',
   });

@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
+
+import { parseServiceArgs, writeUnitFileIfNeeded } from './service.js';
 
 /**
  * Tests for service configuration generation.
@@ -163,6 +167,110 @@ describe('systemd unit generation', () => {
     expect(unit).toContain(
       'ExecStart=/usr/bin/node /srv/nanoclaw/dist/index.js',
     );
+  });
+});
+
+describe('parseServiceArgs', () => {
+  it('defaults to full mode with no preservation flags', () => {
+    const flags = parseServiceArgs([]);
+    expect(flags.mode).toBe('full');
+    expect(flags.preserveUnit).toBe(false);
+    expect(flags.noKill).toBe(false);
+    expect(flags.skipIfRunning).toBe(false);
+  });
+
+  it('treats --mode=rehydrate as all three preservation flags', () => {
+    const flags = parseServiceArgs(['--mode=rehydrate']);
+    expect(flags.mode).toBe('rehydrate');
+    expect(flags.preserveUnit).toBe(true);
+    expect(flags.noKill).toBe(true);
+    expect(flags.skipIfRunning).toBe(true);
+  });
+
+  it('accepts space-separated --mode rehydrate form', () => {
+    const flags = parseServiceArgs(['--mode', 'rehydrate']);
+    expect(flags.mode).toBe('rehydrate');
+    expect(flags.preserveUnit).toBe(true);
+  });
+
+  it('honors individual flags without --mode', () => {
+    const flags = parseServiceArgs([
+      '--preserve-unit',
+      '--no-kill',
+      '--skip-if-running',
+    ]);
+    expect(flags.mode).toBe('full');
+    expect(flags.preserveUnit).toBe(true);
+    expect(flags.noKill).toBe(true);
+    expect(flags.skipIfRunning).toBe(true);
+  });
+
+  it('honors a single individual flag (partial rebuild scenario)', () => {
+    const flags = parseServiceArgs(['--no-kill']);
+    expect(flags.mode).toBe('full');
+    expect(flags.preserveUnit).toBe(false);
+    expect(flags.noKill).toBe(true);
+    expect(flags.skipIfRunning).toBe(false);
+  });
+
+  it('ignores unknown --mode values (stays full)', () => {
+    const flags = parseServiceArgs(['--mode=gibberish']);
+    expect(flags.mode).toBe('full');
+    expect(flags.preserveUnit).toBe(false);
+  });
+
+  it('rehydrate and individual flags combine idempotently', () => {
+    const flags = parseServiceArgs(['--mode=rehydrate', '--no-kill']);
+    expect(flags.mode).toBe('rehydrate');
+    expect(flags.noKill).toBe(true);
+    expect(flags.preserveUnit).toBe(true);
+  });
+});
+
+describe('writeUnitFileIfNeeded', () => {
+  function tmpUnitPath(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nanoclaw-unit-'));
+    return path.join(dir, 'nanoclaw.service');
+  }
+
+  it('writes the unit when no file exists (fresh install)', () => {
+    const p = tmpUnitPath();
+    const flags = parseServiceArgs([]);
+    const result = writeUnitFileIfNeeded(p, 'freshly-generated', flags);
+    expect(result.written).toBe(true);
+    expect(result.preservedExisting).toBe(false);
+    expect(fs.readFileSync(p, 'utf8')).toBe('freshly-generated');
+  });
+
+  it('preserves operator customizations in rehydrate mode', () => {
+    const p = tmpUnitPath();
+    fs.writeFileSync(p, '# CUSTOM_MARKER: must survive');
+    const flags = parseServiceArgs(['--mode=rehydrate']);
+    const result = writeUnitFileIfNeeded(p, 'regenerated-would-clobber', flags);
+    expect(result.written).toBe(false);
+    expect(result.preservedExisting).toBe(true);
+    expect(fs.readFileSync(p, 'utf8')).toBe('# CUSTOM_MARKER: must survive');
+  });
+
+  it('overwrites existing unit in full mode (current install behavior)', () => {
+    const p = tmpUnitPath();
+    fs.writeFileSync(p, 'stale-content');
+    const flags = parseServiceArgs([]);
+    const result = writeUnitFileIfNeeded(p, 'regenerated', flags);
+    expect(result.written).toBe(true);
+    expect(result.preservedExisting).toBe(false);
+    expect(fs.readFileSync(p, 'utf8')).toBe('regenerated');
+  });
+
+  it('still writes when --preserve-unit is set but no file exists', () => {
+    // Rebuild into an empty CT: preserve-unit requested, but nothing to preserve.
+    // Must write so the service can actually start.
+    const p = tmpUnitPath();
+    const flags = parseServiceArgs(['--preserve-unit']);
+    const result = writeUnitFileIfNeeded(p, 'must-write', flags);
+    expect(result.written).toBe(true);
+    expect(result.preservedExisting).toBe(false);
+    expect(fs.readFileSync(p, 'utf8')).toBe('must-write');
   });
 });
 

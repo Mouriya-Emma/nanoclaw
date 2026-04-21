@@ -11,6 +11,40 @@ Run setup steps automatically. Only pause when user action is required (channel 
 
 **UX Note:** Use `AskUserQuestion` for multiple-choice questions only (e.g. "Docker or Apple Container?", "which channels?"). Do NOT use it when free-text input is needed (e.g. phone numbers, tokens, paths) — just ask the question in plain text and wait for the user's reply.
 
+## Pre-flight: Fresh install or rebuild / rehydrate?
+
+Before running any step, determine which scenario you're in — the steps to take and the flags to pass differ.
+
+- **Fresh install** — no prior `.env`, no `groups/*`, no systemd unit, no container image. Run the full flow below (sections 0 through 9).
+- **Rebuild / rehydrate** — the machine or container was destroyed and recreated, but the application state (`.env`, `groups/`, `store/`, `data/`, `logs/`, `~/.config/nanoclaw/mount-allowlist.json`, `~/.claude`, and in the IaC-managed Proxmox case also `/var/lib/docker`) survived on bind mounts / ZFS datasets. Do NOT re-run registration/mount/group steps — they will either no-op or prompt the operator unnecessarily. Use the rehydrate flow below.
+- **Re-run after a partial failure** — same as fresh install for the step that failed; other steps are idempotent except `service` (which kills running processes by default — see below).
+
+Detect rehydrate quickly:
+
+```bash
+# All three of these present → almost certainly rehydrate, not fresh
+test -f .env && test -d groups && test -f ~/.config/nanoclaw/mount-allowlist.json && echo "rehydrate-candidate"
+```
+
+Also: `systemctl --user is-active nanoclaw` returning `active` (or `systemctl is-active nanoclaw` if running as root) means the service is already up — do not run the service step without the rehydrate flags or you will kill the live channel sessions.
+
+### Rehydrate flow (minimal)
+
+Skip sections 0 (git), 2 (environment setup prompts), 2a (timezone), 4 (credentials — already in OneCLI / `.env`), 5 (channels — already merged), 6 (mounts — file already on bind mount). Run only:
+
+1. **Section 1 (bootstrap)** — if `node_modules` is gone from the fresh rootfs, `bash setup.sh` is still needed to reinstall deps.
+2. **Section 3c (container)** — only if the Docker image is missing from `/var/lib/docker`: `npx tsx setup/index.ts --step container -- --runtime docker`. Skip if `docker image inspect nanoclaw-agent:latest` succeeds.
+3. **Section 7 (service) with rehydrate flags** — `npx tsx setup/index.ts --step service -- --mode=rehydrate`. This preserves any hand-edited unit file, skips `pkill` of a running nanoclaw, and skips `systemctl start` if the service is already active. Status block includes `MODE=rehydrate` and `UNIT_PRESERVED=true` when the unit existed.
+4. **Section 8 (verify)** — always safe.
+
+Do NOT run sections 5 (channel skills) or 6 (mounts) unless a specific channel's auth has genuinely been lost. Re-invoking `/add-whatsapp` etc. on rehydrate can re-trigger QR flows against a live session.
+
+Individual flags for partial scenarios (use when `--mode=rehydrate` is too blanket):
+
+- `--preserve-unit` — don't rewrite `/etc/systemd/system/nanoclaw.service` or `~/.config/systemd/user/nanoclaw.service` (protects operator customizations like `OOMScoreAdjust=`, custom `ReadWritePaths=`).
+- `--no-kill` — don't `pkill` running nanoclaw processes (use when running `/setup --step service` to pick up a config change on a live system).
+- `--skip-if-running` — don't `systemctl start` if already `is-active`.
+
 ## 0. Git & Fork Setup
 
 Check the git remote configuration to ensure the user has a fork and upstream is configured.
@@ -273,12 +307,25 @@ If the build fails, read the error output and fix it (usually a missing dependen
 
 ## 6. Mount Allowlist
 
+**Rehydrate check first:** If you've already determined this is a rebuild (pre-flight section above), the file at `~/.config/nanoclaw/mount-allowlist.json` almost certainly already exists on the bind mount. Skip this section entirely — do not re-prompt the operator for mount paths. You can confirm with `test -f ~/.config/nanoclaw/mount-allowlist.json`.
+
 AskUserQuestion: Agent access to external directories?
 
 **No:** `npx tsx setup/index.ts --step mounts -- --empty`
 **Yes:** Collect paths/permissions. `npx tsx setup/index.ts --step mounts -- --json '{"allowedRoots":[...],"blockedPatterns":[],"nonMainReadOnly":true}'`
 
+**If STATUS=skipped in the status block:** The file already exists and `--force` was not passed. That is the correct outcome on rebuilds and on any re-run that should preserve operator choices — do NOT re-prompt and do NOT pass `--force` unless the operator has explicitly said "reset my mount allowlist". Pass `--force` only for:
+
+- The operator said "redo mounts" / "reset mount allowlist" / equivalent.
+- The config file is corrupt (won't parse as JSON) and the operator agreed to start over.
+
+Otherwise leave the existing file untouched and continue.
+
 ## 7. Start Service
+
+**Rehydrate check:** If this is a rebuild / rehydrate (see pre-flight section), run `npx tsx setup/index.ts --step service -- --mode=rehydrate` instead. That preserves any operator-customized unit file, skips `pkill` of a running nanoclaw, and skips `systemctl start` if the service is already active. A successful rehydrate shows `MODE=rehydrate` and (when a unit existed) `UNIT_PRESERVED=true` in the status block. Stop here after verify succeeds.
+
+For a fresh install or a genuine re-install where you want the unit regenerated:
 
 If service already running: unload first.
 - macOS: `launchctl unload ~/Library/LaunchAgents/com.nanoclaw.plist`
