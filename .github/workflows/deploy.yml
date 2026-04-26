@@ -1,0 +1,104 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'container/**'
+      - 'package.json'
+      - 'package-lock.json'
+      - 'tsconfig.json'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch:
+
+# Pattern A (per Mouriya-Emma/local-cicd-demo §Deployment patterns):
+# build on a github-hosted runner, deploy on the netbird-mesh runner.
+# The deploy step rsyncs dist/ + container/ to deploy@nanoclaw.mouriya.lan
+# then `sudo systemctl restart nanoclaw` and a smoke check.
+#
+# Secrets needed (configured in this repo's settings):
+#   DEPLOY_SSH_KEY   - private ed25519 key whose public counterpart is
+#                      authorized for the deploy user on VM 106 (managed by
+#                      homelab-tf _shared/ansible/secrets.yml :
+#                      nanoclaw_deploy_ssh_pubkey).
+
+# Only one deploy can be in flight at a time. Newer pushes wait for the
+# active deploy to finish; the queue collapses if multiple lands during
+# a long deploy.
+concurrency:
+  group: nanoclaw-deploy
+  cancel-in-progress: false
+
+jobs:
+  build:
+    if: github.repository == 'Mouriya-Emma/nanoclaw'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: container
+          path: container/
+          retention-days: 1
+
+  deploy:
+    needs: build
+    runs-on: [self-hosted, linux, vctcn]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: container
+          path: container/
+
+      - name: Stage SSH key
+        env:
+          DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          TARGET: nanoclaw.mouriya.lan
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          # Trust-on-first-use is acceptable here: target is reachable
+          # only via netbird, and ssh-keyscan runs from the netbird side.
+          ssh-keyscan -H "$TARGET" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Rsync dist + container to /opt/nanoclaw
+        env:
+          TARGET: nanoclaw.mouriya.lan
+        run: |
+          rsync -az --delete \
+            -e 'ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes' \
+            dist/ "deploy@${TARGET}:/opt/nanoclaw/dist/"
+          rsync -az --delete \
+            -e 'ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes' \
+            container/ "deploy@${TARGET}:/opt/nanoclaw/container/"
+
+      - name: Restart + smoke
+        env:
+          TARGET: nanoclaw.mouriya.lan
+        run: |
+          ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes "deploy@${TARGET}" \
+            'sudo systemctl restart nanoclaw && sleep 3 && sudo systemctl is-active nanoclaw'
+
+      - name: Cleanup SSH key
+        if: always()
+        run: rm -f ~/.ssh/id_deploy
