@@ -57,6 +57,18 @@ jobs:
           name: container
           path: container/
           retention-days: 1
+      # Ship the manifest pair too so the deploy step can install runtime
+      # deps on the target (`npm install --omit=dev`). Compiling native
+      # modules against the build runner's glibc and shipping node_modules
+      # works for prebuilt packages but breaks for anything that needs to
+      # compile, so we trade slower deploy for reliability.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: manifest
+          path: |
+            package.json
+            package-lock.json
+          retention-days: 1
 
   deploy:
     needs: build
@@ -73,6 +85,11 @@ jobs:
           name: container
           path: container/
 
+      - uses: actions/download-artifact@v4
+        with:
+          name: manifest
+          path: ./
+
       - name: Stage SSH key
         env:
           DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
@@ -86,7 +103,7 @@ jobs:
           # only via netbird, and ssh-keyscan runs from the netbird side.
           ssh-keyscan -H "$TARGET" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Rsync dist + container to /opt/nanoclaw
+      - name: Rsync dist + container + manifest to /opt/nanoclaw
         env:
           TARGET: nanoclaw.mouriya.lan
         run: |
@@ -96,13 +113,37 @@ jobs:
           rsync -az --delete \
             -e 'ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes' \
             container/ "deploy@${TARGET}:/opt/nanoclaw/container/"
+          rsync -az \
+            -e 'ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes' \
+            package.json package-lock.json \
+            "deploy@${TARGET}:/opt/nanoclaw/"
+
+      - name: Install runtime deps on target
+        env:
+          TARGET: nanoclaw.mouriya.lan
+        run: |
+          # `npm install` (not `ci`) because the lockfile is currently
+          # out of sync with package.json — see the build step's comment.
+          ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes "deploy@${TARGET}" \
+            'cd /opt/nanoclaw && npm install --omit=dev --no-audit --no-fund'
 
       - name: Restart + smoke
         env:
           TARGET: nanoclaw.mouriya.lan
         run: |
+          # Boot can take longer than 3 s on first run because better-sqlite3
+          # opens the on-disk db and the mattermost/telegram channels run
+          # their initial WebSocket handshakes; allow up to ~30 s for the
+          # service to settle into `active` before failing the deploy.
           ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes "deploy@${TARGET}" \
-            'sudo systemctl restart nanoclaw && sleep 3 && sudo systemctl is-active nanoclaw'
+            'sudo systemctl restart nanoclaw && for i in $(seq 1 15); do
+               sleep 2
+               state=$(sudo systemctl is-active nanoclaw || true)
+               if [ "$state" = "active" ]; then echo "active after ${i}*2s"; exit 0; fi
+             done
+             echo "service did not become active in 30s; last state: $state" >&2
+             sudo systemctl status nanoclaw --no-pager | head -25 >&2
+             exit 1'
 
       - name: Cleanup SSH key
         if: always()
