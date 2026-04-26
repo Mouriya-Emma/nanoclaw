@@ -39,8 +39,13 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci
+      # `npm install` (not `npm ci`) — package-lock.json on this fork is
+      # currently out of sync with package.json (the operator had a WIP
+      # `npm install` mid-flight when the deploy workflow landed). Issue
+      # to track resyncing the lockfile lives in this repo. Once the
+      # lockfile is back in sync, switch this back to `npm ci` and add
+      # `cache: npm` to the setup-node step.
+      - run: npm install --no-audit --no-fund
       - run: npm run build
       - uses: actions/upload-artifact@v4
         with:
