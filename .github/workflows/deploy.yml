@@ -124,8 +124,13 @@ jobs:
         run: |
           # `npm install` (not `ci`) because the lockfile is currently
           # out of sync with package.json — see the build step's comment.
+          # `--ignore-scripts` so the package's `prepare: husky` (a dev
+          # tool) doesn't run on the prod target where husky isn't
+          # installed; nanoclaw has no postinstall steps that would
+          # actually need to run here (better-sqlite3 ships prebuilt
+          # binaries).
           ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes "deploy@${TARGET}" \
-            'cd /opt/nanoclaw && npm install --omit=dev --no-audit --no-fund'
+            'cd /opt/nanoclaw && npm install --omit=dev --ignore-scripts --no-audit --no-fund'
 
       - name: Restart + smoke
         env:
