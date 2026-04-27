@@ -1,6 +1,5 @@
 import WebSocket from 'ws';
 
-import { TRIGGER_PATTERN } from '../config.js';
 import { deleteUserToken, getUserToken, setUserToken } from '../db.js';
 import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
@@ -349,20 +348,21 @@ export class MattermostChannel implements Channel {
       return;
     }
 
-    // Check trigger requirement
-    let content = post.message;
-    if (group.requiresTrigger !== false && !group.isMain) {
-      if (!TRIGGER_PATTERN.test(content.trim())) return;
-      content = content.replace(TRIGGER_PATTERN, '').trim();
-    }
-
-    // Deliver message
+    // Deliver every message to onMessage with content unchanged. The
+    // trigger filter (when `group.requiresTrigger`) is applied by
+    // index.ts's message loop before agent dispatch — re-checking it
+    // here AND stripping the trigger broke the loop's regex match
+    // (`^@Andy\b` won't match an already-stripped message), which is
+    // why `mm-message-flow.test.ts` and any non-main + requiresTrigger
+    // group used to silently drop trigger messages. Telegram channel
+    // already takes this approach (prepend trigger when bot @mentioned;
+    // never strip), so message-loop semantics work uniformly.
     this.opts.onMessage(chatJid, {
       id: post.id,
       chat_jid: chatJid,
       sender: post.user_id,
       sender_name: senderName,
-      content,
+      content: post.message,
       timestamp,
       is_from_me: false,
     });
