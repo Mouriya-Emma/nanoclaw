@@ -142,13 +142,14 @@ jobs:
         env:
           TARGET: nanoclaw.mouriya.lan
         run: |
-          # `--ignore-scripts` so the package's `prepare: husky` (a dev
-          # tool) doesn't run on the prod target where husky isn't
-          # installed; nanoclaw has no postinstall steps that would
-          # actually need to run here (better-sqlite3 ships prebuilt
-          # binaries).
+          # `--ignore-scripts` skips the `prepare: husky` hook (dev tool
+          # not installed in --omit=dev), but it ALSO skips
+          # better-sqlite3's install hook that downloads/builds the
+          # native .node binding — so we explicitly `npm rebuild` it
+          # afterwards. (Verified: without rebuild, service crashes at
+          # boot with `Could not locate the bindings file`.)
           ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes "deploy@${TARGET}" \
-            'cd /opt/nanoclaw && npm ci --omit=dev --ignore-scripts --no-audit --no-fund'
+            'cd /opt/nanoclaw && npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm rebuild better-sqlite3'
 
       - name: Build agent container image on target (uses Docker layer cache)
         env:
