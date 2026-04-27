@@ -50,28 +50,44 @@ export function hostGatewayArgs(): string[] {
 }
 
 /**
- * If a netbird mesh interface (`wt0`) is up, return `--dns=<wt0-ip>` so
- * the agent container can resolve mesh-private domains (e.g. `*.mouriya.lan`).
+ * If the host is running systemd-resolved, return `--dns=<host-real-nameserver>`
+ * args so the agent container resolves names through the same upstream resolver
+ * the host actually uses, not docker's `8.8.8.8` fallback.
  *
- * Why this approach over bind-mounting `/etc/resolv.conf`:
- * the host is typically running systemd-resolved, whose `resolv.conf` points
- * at the loopback stub `127.0.0.53`. Bind-mounting that file into a container
- * is a null op — `127.0.0.53` inside the container's network namespace has
- * nothing listening, so DNS just hangs. The netbird daemon itself listens
- * on the host's `wt0` IP (port 53) and is reachable from a docker bridge
- * container as a regular peer IP.
+ * Why this matters: docker, on Linux, looks at the host's `/etc/resolv.conf`.
+ * When systemd-resolved is in play that file is just a symlink to a stub
+ * pointing at `127.0.0.53` — docker detects "host is on loopback resolver"
+ * and silently substitutes `8.8.8.8 8.8.4.4` for the container. So any
+ * private DNS zone the host can resolve (LAN-hosted unbound at 192.168.1.22
+ * with hb.lan, mouriya.lan, etc.) is invisible to the container. The fix is
+ * to read systemd-resolved's actual upstream list from
+ * `/run/systemd/resolve/resolv.conf` (the file `systemd-resolved` writes
+ * with the real nameservers, not the stub) and pass each one as `--dns`.
  *
- * Returns `[]` on non-Linux hosts or when `wt0` isn't present, so non-mesh
- * environments fall back to docker's default resolver.
+ * Returns `[]` when the file doesn't exist (non-Linux host, or Linux without
+ * systemd-resolved), so docker's default behaviour stands in those cases.
  */
-export function netbirdDnsArgs(): string[] {
-  if (os.platform() !== 'linux') return [];
-  const ifaces = os.networkInterfaces();
-  const wt0 = ifaces['wt0'];
-  if (!wt0) return [];
-  const ipv4 = wt0.find((a) => a.family === 'IPv4');
-  if (!ipv4) return [];
-  return ['--dns', ipv4.address];
+export function hostResolverArgs(): string[] {
+  try {
+    const content = fs.readFileSync(
+      '/run/systemd/resolve/resolv.conf',
+      'utf-8',
+    );
+    const nameservers = content
+      .split('\n')
+      .filter((l) => l.trim().startsWith('nameserver '))
+      .map((l) => l.trim().split(/\s+/)[1])
+      // Drop IPv6 — docker rejects them in --dns unless the daemon is
+      // configured for IPv6, and this fork's hosts are IPv4-only on the
+      // docker bridge.
+      .filter((ip) => ip && !ip.includes(':'));
+
+    const args: string[] = [];
+    for (const ns of nameservers) args.push('--dns', ns);
+    return args;
+  } catch {
+    return [];
+  }
 }
 
 /** Returns CLI args for a readonly bind mount. */

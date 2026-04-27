@@ -27,7 +27,7 @@ import {
   CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
-  netbirdDnsArgs,
+  hostResolverArgs,
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
@@ -384,11 +384,13 @@ function buildContainerArgs(
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
 
-  // If the host is on a netbird mesh, point the agent at the netbird
-  // daemon's DNS (listening on the host's wt0 IP) so mesh-private
-  // domains like `*.mouriya.lan` resolve from inside the container.
-  // No-op on hosts without wt0. See container-runtime.netbirdDnsArgs.
-  args.push(...netbirdDnsArgs());
+  // Mirror the host's real upstream nameservers into the container so
+  // it resolves names through whatever DNS the host actually uses
+  // (LAN unbound, mesh DNS, internal forward zones), instead of docker's
+  // 8.8.8.8 fallback that kicks in on systemd-resolved hosts. See
+  // container-runtime.hostResolverArgs for why this can't just be
+  // a bind-mount of /etc/resolv.conf.
+  args.push(...hostResolverArgs());
 
   // Prepend host-exec stubs to PATH so agents can call proxied commands directly
   args.push(
