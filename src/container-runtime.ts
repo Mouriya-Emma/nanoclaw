@@ -49,6 +49,31 @@ export function hostGatewayArgs(): string[] {
   return [];
 }
 
+/**
+ * If a netbird mesh interface (`wt0`) is up, return `--dns=<wt0-ip>` so
+ * the agent container can resolve mesh-private domains (e.g. `*.mouriya.lan`).
+ *
+ * Why this approach over bind-mounting `/etc/resolv.conf`:
+ * the host is typically running systemd-resolved, whose `resolv.conf` points
+ * at the loopback stub `127.0.0.53`. Bind-mounting that file into a container
+ * is a null op — `127.0.0.53` inside the container's network namespace has
+ * nothing listening, so DNS just hangs. The netbird daemon itself listens
+ * on the host's `wt0` IP (port 53) and is reachable from a docker bridge
+ * container as a regular peer IP.
+ *
+ * Returns `[]` on non-Linux hosts or when `wt0` isn't present, so non-mesh
+ * environments fall back to docker's default resolver.
+ */
+export function netbirdDnsArgs(): string[] {
+  if (os.platform() !== 'linux') return [];
+  const ifaces = os.networkInterfaces();
+  const wt0 = ifaces['wt0'];
+  if (!wt0) return [];
+  const ipv4 = wt0.find((a) => a.family === 'IPv4');
+  if (!ipv4) return [];
+  return ['--dns', ipv4.address];
+}
+
 /** Returns CLI args for a readonly bind mount. */
 export function readonlyMountArgs(
   hostPath: string,

@@ -27,6 +27,7 @@ import {
   CONTAINER_HOST_GATEWAY,
   CONTAINER_RUNTIME_BIN,
   hostGatewayArgs,
+  netbirdDnsArgs,
   readonlyMountArgs,
   stopContainer,
 } from './container-runtime.js';
@@ -382,6 +383,12 @@ function buildContainerArgs(
 
   // Runtime-specific args for host gateway resolution
   args.push(...hostGatewayArgs());
+
+  // If the host is on a netbird mesh, point the agent at the netbird
+  // daemon's DNS (listening on the host's wt0 IP) so mesh-private
+  // domains like `*.mouriya.lan` resolve from inside the container.
+  // No-op on hosts without wt0. See container-runtime.netbirdDnsArgs.
+  args.push(...netbirdDnsArgs());
 
   // Prepend host-exec stubs to PATH so agents can call proxied commands directly
   args.push(
