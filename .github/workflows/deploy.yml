@@ -6,6 +6,7 @@ on:
     paths:
       - 'src/**'
       - 'container/**'
+      - 'scripts/**'
       - 'package.json'
       - 'package-lock.json'
       - 'tsconfig.json'
@@ -39,13 +40,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # `npm install` (not `npm ci`) — package-lock.json on this fork is
-      # currently out of sync with package.json (the operator had a WIP
-      # `npm install` mid-flight when the deploy workflow landed). Issue
-      # to track resyncing the lockfile lives in this repo. Once the
-      # lockfile is back in sync, switch this back to `npm ci` and add
-      # `cache: npm` to the setup-node step.
-      - run: npm install --no-audit --no-fund
+          cache: npm
+      - run: npm ci --no-audit --no-fund
       - run: npm run build
       - uses: actions/upload-artifact@v4
         with:
@@ -57,10 +53,17 @@ jobs:
           name: container
           path: container/
           retention-days: 1
+      # Ship scripts/ too — src/ references /opt/nanoclaw/scripts/cleanup-sessions.sh
+      # at runtime; without these the periodic session cleanup spams ERROR.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scripts
+          path: scripts/
+          retention-days: 1
       # Ship the manifest pair too so the deploy step can install runtime
-      # deps on the target (`npm install --omit=dev`). Compiling native
-      # modules against the build runner's glibc and shipping node_modules
-      # works for prebuilt packages but breaks for anything that needs to
+      # deps on the target (`npm ci --omit=dev`). Compiling native modules
+      # against the build runner's glibc and shipping node_modules works
+      # for prebuilt packages but breaks for anything that needs to
       # compile, so we trade slower deploy for reliability.
       - uses: actions/upload-artifact@v4
         with:
@@ -87,8 +90,22 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
+          name: scripts
+          path: scripts/
+
+      - uses: actions/download-artifact@v4
+        with:
           name: manifest
           path: ./
+
+      # actions/download-artifact strips the executable bit (known GHA
+      # behaviour). Restore +x on shell scripts the target needs to exec.
+      - name: Restore exec bit on shell scripts
+        run: |
+          chmod +x container/build.sh
+          find container/agent-runner container/pi-runner container/skills scripts/ \
+            -type f \( -name '*.sh' -o -name '*.mjs' \) -print0 2>/dev/null \
+            | xargs -0r chmod +x
 
       - name: Stage SSH key
         env:
@@ -103,7 +120,7 @@ jobs:
           # only via netbird, and ssh-keyscan runs from the netbird side.
           ssh-keyscan -H "$TARGET" >> ~/.ssh/known_hosts 2>/dev/null
 
-      - name: Rsync dist + container + manifest to /opt/nanoclaw
+      - name: Rsync dist + container + scripts + manifest to /opt/nanoclaw
         env:
           TARGET: nanoclaw.mouriya.lan
         run: |
@@ -113,6 +130,9 @@ jobs:
           rsync -az --delete \
             -e 'ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes' \
             container/ "deploy@${TARGET}:/opt/nanoclaw/container/"
+          rsync -az --delete \
+            -e 'ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes' \
+            scripts/ "deploy@${TARGET}:/opt/nanoclaw/scripts/"
           rsync -az \
             -e 'ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes' \
             package.json package-lock.json \
@@ -122,15 +142,24 @@ jobs:
         env:
           TARGET: nanoclaw.mouriya.lan
         run: |
-          # `npm install` (not `ci`) because the lockfile is currently
-          # out of sync with package.json — see the build step's comment.
           # `--ignore-scripts` so the package's `prepare: husky` (a dev
           # tool) doesn't run on the prod target where husky isn't
           # installed; nanoclaw has no postinstall steps that would
           # actually need to run here (better-sqlite3 ships prebuilt
           # binaries).
           ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes "deploy@${TARGET}" \
-            'cd /opt/nanoclaw && npm install --omit=dev --ignore-scripts --no-audit --no-fund'
+            'cd /opt/nanoclaw && npm ci --omit=dev --ignore-scripts --no-audit --no-fund'
+
+      - name: Build agent container image on target (uses Docker layer cache)
+        env:
+          TARGET: nanoclaw.mouriya.lan
+        run: |
+          # Build on the target — Dockerfile + agent-runner sources need
+          # to land before nanoclaw orchestrator's container-runner.ts
+          # can spawn them. Daemon's layer cache makes subsequent builds
+          # cheap; the image rebuilds only when container/ contents change.
+          ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes "deploy@${TARGET}" \
+            'cd /opt/nanoclaw/container && bash ./build.sh'
 
       - name: Restart + smoke
         env:
