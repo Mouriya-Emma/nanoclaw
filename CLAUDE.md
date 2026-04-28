@@ -6,6 +6,8 @@ Personal Claude assistant. See [README.md](README.md) for philosophy and setup. 
 
 Single Node.js process with skill-based channel system. Channels (WhatsApp, Telegram, Slack, Discord, Gmail) are skills that self-register at startup. Messages route to Claude Agent SDK running in containers (Linux VMs). Each group has isolated filesystem and memory. Supports two runtimes: **Claude Agent SDK** (`/cla`) and **pi-mono** (`/pi`) — pi-mono supports multiple backends (anthropic, google, openai, github-copilot, google-antigravity) via OAuth.
 
+This fork (`Mouriya-Emma/nanoclaw`) deploys to homelab VM 106 via the IaC at `Mouriya-Emma/homelab-tf` and ships new builds via `.github/workflows/deploy.yml`. Full topology, bring-up, runtime, and operating instructions are in [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Local-dev `npm run dev` and the upstream `/setup` flow still work for hacking on a clone.
+
 ## Key Files
 
 | File | Purpose |
