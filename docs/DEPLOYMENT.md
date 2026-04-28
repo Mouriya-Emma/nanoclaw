@@ -57,8 +57,8 @@ The deploy workflow has `concurrency: { group: nanoclaw-deploy, cancel-in-progre
 ExecStart is `/usr/local/bin/nanoclaw-launch.sh`, which is the interesting part: on every start it fetches runtime secrets from OpenBao at `secret/nanoclaw/runtime`, materialises them into `/opt/nanoclaw/.env` (mode 0600), and execs `node dist/index.js`. The KV-v2 path holds three fields:
 
 - `claude_token` — the Anthropic OAuth token (also exported as `ANTHROPIC_AUTH_TOKEN`).
-- `mattermost_url` — the homelab Mattermost endpoint nanoclaw reads/writes against.
-- `mattermost_bot_token` — the bot account's Personal Access Token.
+- `mattermost_url` — points at the **vctcn-app1** Mattermost (VM 180 of `Mouriya-Emma/pve-vctcn`, the OVH bare-metal PVE — separate repo, separate host from this homelab). Mattermost reaches nanoclaw and vice-versa over the netbird mesh; there is no LAN path between them. Mattermost shares its compose stack on vctcn-app1 with Keycloak — the two are deployed together as one unit there. nanoclaw historically integrated against a homelab Mattermost on `moat-app1`; that cutover moved to vctcn-app1 and stuck. The `komodo/roles/komodo-stacks/templates/mattermost/` template still living in `homelab-tf` is pre-cutover residue and is not in the current apply path.
+- `mattermost_bot_token` — the bot account's token. Validated by Mattermost itself, so day-to-day API auth from nanoclaw doesn't traverse Keycloak; Keycloak is in the picture for the bot's account lifecycle (creation / SSO login of human users on the same instance) but not for nanoclaw's hot path.
 
 Why fetch on every start instead of pinning into the unit's `Environment=`: rotating any of these is then "edit the value in OpenBao, `sudo systemctl restart nanoclaw`" — no role re-run, no secret in version control. The launch script also calls `auth/token/renew-self` on the bao token before reading the data path, so the periodic token's lease doesn't expire under a long-lived service.
 
