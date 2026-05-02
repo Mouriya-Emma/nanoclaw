@@ -63,6 +63,19 @@ export interface ContainerOutput {
   error?: string;
 }
 
+interface SessionUpdateOutput {
+  type: 'session_update';
+  newSessionId: string;
+}
+
+type RunnerOutput = ContainerOutput | SessionUpdateOutput;
+
+function isSessionUpdateOutput(
+  output: RunnerOutput,
+): output is SessionUpdateOutput {
+  return 'type' in output && output.type === 'session_update';
+}
+
 interface VolumeMount {
   hostPath: string;
   containerPath: string;
@@ -539,9 +552,13 @@ export async function runContainerAgent(
           parseBuffer = parseBuffer.slice(endIdx + OUTPUT_END_MARKER.length);
 
           try {
-            const parsed: ContainerOutput = JSON.parse(jsonStr);
+            const parsed = JSON.parse(jsonStr) as RunnerOutput;
             if (parsed.newSessionId) {
               newSessionId = parsed.newSessionId;
+            }
+            if (isSessionUpdateOutput(parsed)) {
+              resetTimeout();
+              continue;
             }
             hadStreamingOutput = true;
             // Activity detected — reset the hard timeout
@@ -659,6 +676,7 @@ export async function runContainerAgent(
         resolve({
           status: 'error',
           result: null,
+          newSessionId,
           error: `Container timed out after ${configTimeout}ms`,
         });
         return;
@@ -748,6 +766,7 @@ export async function runContainerAgent(
         resolve({
           status: 'error',
           result: null,
+          newSessionId,
           error: `Container exited with code ${code}: ${stderr.slice(-200)}`,
         });
         return;
@@ -769,24 +788,40 @@ export async function runContainerAgent(
         return;
       }
 
-      // Legacy mode: parse the last output marker pair from accumulated stdout
+      // Legacy mode: parse the last non-session-update output marker from accumulated stdout
       try {
-        // Extract JSON between sentinel markers for robust parsing
-        const startIdx = stdout.indexOf(OUTPUT_START_MARKER);
-        const endIdx = stdout.indexOf(OUTPUT_END_MARKER);
+        let output: ContainerOutput | undefined;
+        let searchFrom = 0;
+        while (true) {
+          const startIdx = stdout.indexOf(OUTPUT_START_MARKER, searchFrom);
+          if (startIdx === -1) break;
+          const endIdx = stdout.indexOf(OUTPUT_END_MARKER, startIdx);
+          if (endIdx === -1) break;
 
-        let jsonLine: string;
-        if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-          jsonLine = stdout
+          const jsonLine = stdout
             .slice(startIdx + OUTPUT_START_MARKER.length, endIdx)
             .trim();
-        } else {
-          // Fallback: last non-empty line (backwards compatibility)
-          const lines = stdout.trim().split('\n');
-          jsonLine = lines[lines.length - 1];
+          const parsed = JSON.parse(jsonLine) as RunnerOutput;
+          if (parsed.newSessionId) {
+            newSessionId = parsed.newSessionId;
+          }
+          if (!isSessionUpdateOutput(parsed)) {
+            output = parsed;
+          }
+          searchFrom = endIdx + OUTPUT_END_MARKER.length;
         }
 
-        const output: ContainerOutput = JSON.parse(jsonLine);
+        if (!output) {
+          const lines = stdout.trim().split('\n');
+          const parsed = JSON.parse(lines[lines.length - 1]) as RunnerOutput;
+          if (parsed.newSessionId) {
+            newSessionId = parsed.newSessionId;
+          }
+          if (isSessionUpdateOutput(parsed)) {
+            throw new Error('No final container output marker found');
+          }
+          output = parsed;
+        }
 
         logger.info(
           {
@@ -813,6 +848,7 @@ export async function runContainerAgent(
         resolve({
           status: 'error',
           result: null,
+          newSessionId,
           error: `Failed to parse container output: ${err instanceof Error ? err.message : String(err)}`,
         });
       }

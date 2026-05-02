@@ -119,7 +119,14 @@ async function readStdin(): Promise<string> {
 const OUTPUT_START_MARKER = '---NANOCLAW_OUTPUT_START---';
 const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
-function writeOutput(output: ContainerOutput): void {
+interface SessionUpdateOutput {
+  type: 'session_update';
+  newSessionId: string;
+}
+
+type RunnerOutput = ContainerOutput | SessionUpdateOutput;
+
+function writeOutput(output: RunnerOutput): void {
   console.log(OUTPUT_START_MARKER);
   console.log(JSON.stringify(output));
   console.log(OUTPUT_END_MARKER);
@@ -532,6 +539,7 @@ async function runQuery(
     if (message.type === 'system' && message.subtype === 'init') {
       newSessionId = message.session_id;
       log(`Session initialized: ${newSessionId}`);
+      writeOutput({ type: 'session_update', newSessionId });
     }
 
     if (

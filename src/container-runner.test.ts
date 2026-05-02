@@ -73,6 +73,7 @@ vi.mock('./container-runtime.js', () => ({
   hostGatewayArgs: vi.fn(() => [
     '--add-host=host.docker.internal:host-gateway',
   ]),
+  hostResolverArgs: vi.fn(() => []),
   readonlyMountArgs: vi.fn((host: string, container: string) => [
     '-v',
     `${host}:${container}:ro`,
@@ -149,7 +150,7 @@ const testInput = {
 
 function emitOutputMarker(
   proc: ReturnType<typeof createFakeProcess>,
-  output: ContainerOutput,
+  output: ContainerOutput | { type: 'session_update'; newSessionId: string },
 ) {
   const json = JSON.stringify(output);
   proc.stdout.push(`${OUTPUT_START_MARKER}\n${json}\n${OUTPUT_END_MARKER}\n`);
@@ -222,6 +223,54 @@ describe('container-runner timeout behavior', () => {
     expect(result.status).toBe('error');
     expect(result.error).toContain('timed out');
     expect(onOutput).not.toHaveBeenCalled();
+  });
+
+  it('session update marker updates session without invoking output callback', async () => {
+    const onOutput = vi.fn(async () => {});
+    const resultPromise = runContainerAgent(
+      testGroup,
+      testInput,
+      () => {},
+      onOutput,
+    );
+
+    emitOutputMarker(fakeProc, {
+      type: 'session_update',
+      newSessionId: 'session-from-init',
+    });
+
+    await vi.advanceTimersByTimeAsync(10);
+    fakeProc.emit('close', 1);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result.status).toBe('error');
+    expect(result.newSessionId).toBe('session-from-init');
+    expect(onOutput).not.toHaveBeenCalled();
+  });
+
+  it('legacy parser skips session update marker and returns final output', async () => {
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    emitOutputMarker(fakeProc, {
+      type: 'session_update',
+      newSessionId: 'session-from-init',
+    });
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Done after init',
+      newSessionId: 'session-from-result',
+    });
+
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    const result = await resultPromise;
+    expect(result).toEqual({
+      status: 'success',
+      result: 'Done after init',
+      newSessionId: 'session-from-result',
+    });
   });
 
   it('normal exit after output resolves as success', async () => {
