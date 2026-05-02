@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import os from 'os';
 import path from 'path';
 
@@ -41,6 +42,21 @@ export const SENDER_ALLOWLIST_PATH = path.join(
 export const STORE_DIR = path.resolve(PROJECT_ROOT, 'store');
 export const GROUPS_DIR = path.resolve(PROJECT_ROOT, 'groups');
 export const DATA_DIR = path.resolve(PROJECT_ROOT, 'data');
+
+function slugifyPathBasename(root: string): string {
+  const base = path.basename(root).toLowerCase();
+  return (
+    base.replace(/[^a-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '') || 'install'
+  );
+}
+
+function buildInstallSlug(root: string): string {
+  const hash = createHash('sha256').update(root).digest('hex').slice(0, 10);
+  return `${slugifyPathBasename(root)}-${hash}`;
+}
+
+export const INSTALL_SLUG = buildInstallSlug(PROJECT_ROOT);
+export const CONTAINER_INSTALL_LABEL = `nanoclaw-install=${INSTALL_SLUG}`;
 
 export const CONTAINER_IMAGE =
   process.env.CONTAINER_IMAGE || 'nanoclaw-agent:latest';

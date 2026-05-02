@@ -23,6 +23,7 @@ import {
   ensureContainerRuntimeRunning,
   cleanupOrphans,
 } from './container-runtime.js';
+import { CONTAINER_INSTALL_LABEL } from './config.js';
 import { logger } from './logger.js';
 
 beforeEach(() => {
@@ -92,6 +93,17 @@ describe('ensureContainerRuntimeRunning', () => {
 // --- cleanupOrphans ---
 
 describe('cleanupOrphans', () => {
+  it('filters ps by the install label so peers are not reaped', () => {
+    mockExecSync.mockReturnValueOnce('');
+
+    cleanupOrphans();
+
+    expect(mockExecSync).toHaveBeenCalledWith(
+      `${CONTAINER_RUNTIME_BIN} ps --filter label=${CONTAINER_INSTALL_LABEL} --format '{{.Names}}'`,
+      expect.any(Object),
+    );
+  });
+
   it('stops orphaned nanoclaw containers', () => {
     // docker ps returns container names, one per line
     mockExecSync.mockReturnValueOnce(

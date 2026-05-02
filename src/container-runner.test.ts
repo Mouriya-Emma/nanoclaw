@@ -26,6 +26,7 @@ vi.mock('./config.js', () => ({
     'google-antigravity': [],
   },
   TIMEZONE: 'America/Los_Angeles',
+  CONTAINER_INSTALL_LABEL: 'nanoclaw-install=test-install',
 }));
 
 // Mock logger
@@ -73,6 +74,7 @@ vi.mock('./container-runtime.js', () => ({
   hostGatewayArgs: vi.fn(() => [
     '--add-host=host.docker.internal:host-gateway',
   ]),
+  hostResolverArgs: vi.fn(() => []),
   readonlyMountArgs: vi.fn((host: string, container: string) => [
     '-v',
     `${host}:${container}:ro`,
@@ -131,6 +133,9 @@ vi.mock('child_process', async () => {
 });
 
 import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import { CONTAINER_RUNTIME_BIN } from './container-runtime.js';
+import { CONTAINER_INSTALL_LABEL } from './config.js';
+import { spawn } from 'child_process';
 import type { RegisteredGroup } from './types.js';
 
 const testGroup: RegisteredGroup = {
@@ -154,6 +159,35 @@ function emitOutputMarker(
   const json = JSON.stringify(output);
   proc.stdout.push(`${OUTPUT_START_MARKER}\n${json}\n${OUTPUT_END_MARKER}\n`);
 }
+
+describe('container-runner labels', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    fakeProc = createFakeProcess();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('labels spawned containers with the install label', async () => {
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    fakeProc.stdout.push(
+      `${OUTPUT_START_MARKER}\n${JSON.stringify({ status: 'success', result: 'Done' })}\n${OUTPUT_END_MARKER}\n`,
+    );
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    await resultPromise;
+
+    expect(spawn).toHaveBeenCalledWith(
+      CONTAINER_RUNTIME_BIN,
+      expect.arrayContaining(['--label', CONTAINER_INSTALL_LABEL]),
+      expect.any(Object),
+    );
+  });
+});
 
 describe('container-runner timeout behavior', () => {
   beforeEach(() => {
