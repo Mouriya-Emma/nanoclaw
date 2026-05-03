@@ -973,7 +973,12 @@ describe('TelegramChannel', () => {
       await channel.connect();
 
       const handler = currentBot().commandHandlers.get('ping')!;
-      const ctx = { reply: vi.fn() };
+      const ctx = {
+        chat: { id: 100200300, type: 'group' as const },
+        from: { id: 99001, first_name: 'Alice' },
+        message: { message_id: 1, date: 1700000000 } as any,
+        reply: vi.fn(),
+      };
 
       await handler(ctx);
 
