@@ -249,7 +249,7 @@ describe('MattermostChannel', () => {
       expect(opts.onMessage).not.toHaveBeenCalled();
     });
 
-    it('requires trigger for non-main groups', async () => {
+    it('delivers non-main group messages without applying trigger filtering', async () => {
       opts.registeredGroups.mockReturnValue({
         'mm:ch1': {
           name: 'test',
@@ -272,14 +272,18 @@ describe('MattermostChannel', () => {
         }),
       );
 
-      // Message without trigger — should be skipped
       wsInstance.emit('message', Buffer.from(makeWsPostedEvent()));
       await new Promise((r) => setTimeout(r, 50));
 
-      expect(opts.onMessage).not.toHaveBeenCalled();
+      expect(opts.onMessage).toHaveBeenCalledWith(
+        'mm:ch1',
+        expect.objectContaining({
+          content: 'hello world',
+        }),
+      );
     });
 
-    it('strips trigger and delivers for non-main groups', async () => {
+    it('preserves trigger text for non-main groups', async () => {
       opts.registeredGroups.mockReturnValue({
         'mm:ch1': {
           name: 'test',
@@ -313,7 +317,7 @@ describe('MattermostChannel', () => {
       expect(opts.onMessage).toHaveBeenCalledWith(
         'mm:ch1',
         expect.objectContaining({
-          content: 'what is the weather?',
+          content: '@Andy what is the weather?',
         }),
       );
     });
@@ -379,6 +383,9 @@ describe('MattermostChannel', () => {
           type: 'O',
         }),
       );
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ id: 'user1', username: 'alice' }),
+      );
       // For the reply post
       mockFetch.mockResolvedValueOnce(jsonResponse({ id: 'reply1' }));
 
@@ -411,6 +418,9 @@ describe('MattermostChannel', () => {
           name: 'general',
           type: 'O',
         }),
+      );
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ id: 'user1', username: 'alice' }),
       );
       mockFetch.mockResolvedValueOnce(jsonResponse({ id: 'reply1' }));
 
@@ -449,6 +459,9 @@ describe('MattermostChannel', () => {
           type: 'O',
         }),
       );
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ id: 'user1', username: 'alice' }),
+      );
       mockFetch.mockResolvedValueOnce(jsonResponse({ id: 'reply1' }));
 
       wsInstance.emit(
@@ -481,6 +494,9 @@ describe('MattermostChannel', () => {
           type: 'O',
         }),
       );
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ id: 'user1', username: 'alice' }),
+      );
       mockFetch.mockResolvedValueOnce(jsonResponse({ id: 'reply1' }));
 
       wsInstance.emit(
@@ -505,6 +521,9 @@ describe('MattermostChannel', () => {
           name: 'general',
           type: 'O',
         }),
+      );
+      mockFetch.mockResolvedValueOnce(
+        jsonResponse({ id: 'user1', username: 'alice' }),
       );
       mockFetch.mockResolvedValueOnce(jsonResponse({ id: 'reply1' }));
 
