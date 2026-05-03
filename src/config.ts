@@ -11,6 +11,7 @@ const envConfig = readEnvFile([
   'TZ',
   'HOST_EXEC_ALLOWLIST',
   'PI_CONTAINER_IMAGE',
+  'CLAUDE_CODE_AUTO_COMPACT_WINDOW',
 ]);
 
 export const ASSISTANT_NAME =
@@ -48,6 +49,10 @@ export const PI_CONTAINER_IMAGE =
   process.env.PI_CONTAINER_IMAGE ||
   envConfig.PI_CONTAINER_IMAGE ||
   'nanoclaw-pi:latest';
+export const CLAUDE_CODE_AUTO_COMPACT_WINDOW =
+  process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW ||
+  envConfig.CLAUDE_CODE_AUTO_COMPACT_WINDOW ||
+  '165000';
 
 // Provider → env key mapping for secrets
 // Pi-mono providers use OAuth credentials (from pi-auth.json) rather than API keys,

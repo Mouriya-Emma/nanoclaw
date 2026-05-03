@@ -8,6 +8,7 @@ import os from 'os';
 import path from 'path';
 
 import {
+  CLAUDE_CODE_AUTO_COMPACT_WINDOW,
   CONTAINER_IMAGE,
   CONTAINER_MAX_OUTPUT_SIZE,
   CONTAINER_TIMEOUT,
@@ -363,6 +364,10 @@ function buildContainerArgs(
 
   // Pass host timezone so container's local time matches the user's
   args.push('-e', `TZ=${TIMEZONE}`);
+  args.push(
+    '-e',
+    `CLAUDE_CODE_AUTO_COMPACT_WINDOW=${CLAUDE_CODE_AUTO_COMPACT_WINDOW}`,
+  );
 
   // Route API traffic through the credential proxy (containers never see real secrets)
   args.push(

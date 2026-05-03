@@ -654,7 +654,8 @@ async function main(): Promise<void> {
   // No real secrets exist in the container environment.
   const sdkEnv: Record<string, string | undefined> = {
     ...process.env,
-    CLAUDE_CODE_AUTO_COMPACT_WINDOW: '165000',
+    CLAUDE_CODE_AUTO_COMPACT_WINDOW:
+      process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || '165000',
   };
 
   const __dirname = path.dirname(fileURLToPath(import.meta.url));

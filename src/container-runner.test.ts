@@ -8,6 +8,7 @@ const OUTPUT_END_MARKER = '---NANOCLAW_OUTPUT_END---';
 
 // Mock config
 vi.mock('./config.js', () => ({
+  CLAUDE_CODE_AUTO_COMPACT_WINDOW: '333000',
   CONTAINER_IMAGE: 'nanoclaw-agent:latest',
   PI_CONTAINER_IMAGE: 'nanoclaw-pi:latest',
   CONTAINER_MAX_OUTPUT_SIZE: 10485760,
@@ -73,6 +74,7 @@ vi.mock('./container-runtime.js', () => ({
   hostGatewayArgs: vi.fn(() => [
     '--add-host=host.docker.internal:host-gateway',
   ]),
+  hostResolverArgs: vi.fn(() => []),
   readonlyMountArgs: vi.fn((host: string, container: string) => [
     '-v',
     `${host}:${container}:ro`,
@@ -131,6 +133,7 @@ vi.mock('child_process', async () => {
 });
 
 import { runContainerAgent, ContainerOutput } from './container-runner.js';
+import { spawn } from 'child_process';
 import type { RegisteredGroup } from './types.js';
 
 const testGroup: RegisteredGroup = {
@@ -222,6 +225,25 @@ describe('container-runner timeout behavior', () => {
     expect(result.status).toBe('error');
     expect(result.error).toContain('timed out');
     expect(onOutput).not.toHaveBeenCalled();
+  });
+
+  it('passes the configured auto compact window into the container', async () => {
+    const resultPromise = runContainerAgent(testGroup, testInput, () => {});
+
+    emitOutputMarker(fakeProc, {
+      status: 'success',
+      result: 'Done',
+    });
+    fakeProc.emit('close', 0);
+    await vi.advanceTimersByTimeAsync(10);
+
+    await resultPromise;
+
+    expect(spawn).toHaveBeenCalledWith(
+      'docker',
+      expect.arrayContaining(['-e', 'CLAUDE_CODE_AUTO_COMPACT_WINDOW=333000']),
+      expect.any(Object),
+    );
   });
 
   it('normal exit after output resolves as success', async () => {
