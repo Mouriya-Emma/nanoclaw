@@ -66,7 +66,7 @@ Closes #N.
 
 ## Layer 4 — End-to-end behavior
 
-<E2E evidence. NanoClaw has `e2e/` suites covering Telegram (gramjs), Mattermost (WebSocket+REST), pi-mono OAuth, host-exec. If the change touches channels / runtime / scheduler, run the relevant `npm run test:e2e:*` slice and quote the result. E2E is NOT in CI — operator runs it manually with a live `192.168.1.41` Mattermost + valid `data/pi-auth.json` + `E2E_TELEGRAM_SESSION`. If the env is unavailable, document the gap explicitly rather than waiving.>
+<E2E evidence. NanoClaw has `e2e/` suites covering Telegram (gramjs), Mattermost (WebSocket+REST), pi-mono OAuth, host-exec. If the change touches channels / runtime / scheduler, run the relevant `pnpm run test:e2e:*` slice and quote the result. E2E is NOT in CI — operator runs it manually with a live `192.168.1.41` Mattermost + valid `data/pi-auth.json` + `E2E_TELEGRAM_SESSION`. If the env is unavailable, document the gap explicitly rather than waiving.>
 
 ## Analysis
 
@@ -79,20 +79,20 @@ Drop layers your specific issue genuinely doesn't need (e.g. Layer 4 for a pure 
 
 Per `package.json` and `.github/workflows/ci.yml`:
 
-- Format check: `npm run format:check` (CI gate)
-- Typecheck: `npx tsc --noEmit` (CI gate)
-- Unit tests: `npx vitest run` (CI gate)
-- Build: `npm run build`
-- E2E (manual only, not in CI): `npm run test:e2e:*` slices
+- Format check: `pnpm run format:check` (CI gate)
+- Typecheck: `pnpm exec tsc --noEmit` (CI gate)
+- Unit tests: `pnpm exec vitest run` (CI gate)
+- Build: `pnpm run build`
+- E2E (manual only, not in CI): `pnpm run test:e2e:*` slices
 
-After the v2 baseline migration lands, switch all of the above from `npm` to `pnpm` (v2 upstream uses `pnpm@10.33.0`). Update this section in the same PR that lands the migration.
+The v2.0.54 baseline pins `pnpm@10.33.0` (`package.json` `packageManager`). Local dev install: `pnpm install --frozen-lockfile`.
 
 ## CI-parity evidence
 
 Every PR must state:
 
 - whether `.github/workflows/ci.yml` ran on the PR (visible via `gh pr checks <pr>`);
-- the local CI-parity command actually run (the four-step sequence: `npm ci && npm run format:check && npx tsc --noEmit && npx vitest run`);
+- the local CI-parity command actually run (the four-step sequence: `pnpm install --frozen-lockfile && pnpm run format:check && pnpm exec tsc --noEmit && pnpm exec vitest run`);
 - runner architecture (note: CI is `ubuntu-latest` x86_64; local dev is likely macOS arm64 — `better-sqlite3` rebuild can diverge);
 - exit status of each step;
 - concise log excerpt or log path under `.coder-loop/runtime/evidence/`.
@@ -104,7 +104,7 @@ Remote GitHub `ci.yml` checks are mergeability signals. They do not replace iter
 NanoClaw is a backend / CLI service, not a UI project. Layer 4 evidence is integration testing, not browser screenshots.
 
 For changes touching channels (mattermost/telegram), runtime (claude/pi-mono), scheduler, IPC, or session lifecycle:
-- Run the relevant `npm run test:e2e:*` slice against the operator's live env.
+- Run the relevant `pnpm run test:e2e:*` slice against the operator's live env.
 - Quote the test output (pass/fail counts) in Layer 4.
 - If the live env is unavailable (no `192.168.1.41` reachable, no valid `E2E_TELEGRAM_SESSION`, no `data/pi-auth.json`), document the gap in Layer 4 and block for operator review rather than waiving silently.
 
