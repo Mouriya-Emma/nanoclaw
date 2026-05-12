@@ -58,6 +58,11 @@ import './modules/index.js';
 // accepts connections.
 import './cli/commands/index.js';
 import './cli/delivery-action.js';
+
+// Fork-features barrel — registers delivery actions, channels, etc. supplied
+// by the fork. Single-line trunk edit; everything else lives under
+// src/fork-features/.
+import './fork-features/index.js';
 import { startCliServer, stopCliServer } from './cli/socket-server.js';
 
 import type { ChannelAdapter, ChannelSetup } from './channels/adapter.js';
