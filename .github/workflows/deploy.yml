@@ -8,7 +8,7 @@ on:
       - 'container/**'
       - 'scripts/**'
       - 'package.json'
-      - 'package-lock.json'
+      - 'pnpm-lock.yaml'
       - 'tsconfig.json'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
@@ -37,12 +37,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-      - run: npm ci --no-audit --no-fund
-      - run: npm run build
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build
       - uses: actions/upload-artifact@v4
         with:
           name: dist
@@ -60,17 +61,17 @@ jobs:
           name: scripts
           path: scripts/
           retention-days: 1
-      # Ship the manifest pair too so the deploy step can install runtime
-      # deps on the target (`npm ci --omit=dev`). Compiling native modules
-      # against the build runner's glibc and shipping node_modules works
-      # for prebuilt packages but breaks for anything that needs to
-      # compile, so we trade slower deploy for reliability.
+      # Ship the manifest pair so the deploy step can install runtime deps on
+      # the target via `pnpm install --frozen-lockfile --prod`. Compiling
+      # native modules against the build runner's glibc and shipping
+      # node_modules works for prebuilt packages but breaks for anything
+      # that needs to compile, so we trade slower deploy for reliability.
       - uses: actions/upload-artifact@v4
         with:
           name: manifest
           path: |
             package.json
-            package-lock.json
+            pnpm-lock.yaml
           retention-days: 1
 
   deploy:
@@ -135,7 +136,7 @@ jobs:
             scripts/ "deploy@${TARGET}:/opt/nanoclaw/scripts/"
           rsync -az \
             -e 'ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes' \
-            package.json package-lock.json \
+            package.json pnpm-lock.yaml \
             "deploy@${TARGET}:/opt/nanoclaw/"
 
       - name: Install runtime deps on target
@@ -143,13 +144,13 @@ jobs:
           TARGET: nanoclaw.mouriya.lan
         run: |
           # `--ignore-scripts` skips the `prepare: husky` hook (dev tool
-          # not installed in --omit=dev), but it ALSO skips
-          # better-sqlite3's install hook that downloads/builds the
-          # native .node binding — so we explicitly `npm rebuild` it
-          # afterwards. (Verified: without rebuild, service crashes at
-          # boot with `Could not locate the bindings file`.)
+          # not installed in --prod), but it ALSO skips better-sqlite3's
+          # install hook that downloads/builds the native .node binding —
+          # so we explicitly `pnpm rebuild` it afterwards. (Verified
+          # against v1 npm path: without rebuild, service crashes at boot
+          # with `Could not locate the bindings file`.)
           ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes "deploy@${TARGET}" \
-            'cd /opt/nanoclaw && npm ci --omit=dev --ignore-scripts --no-audit --no-fund && npm rebuild better-sqlite3'
+            'cd /opt/nanoclaw && pnpm install --frozen-lockfile --prod --ignore-scripts && pnpm rebuild better-sqlite3'
 
       - name: Build agent container image on target (uses Docker layer cache)
         env:
