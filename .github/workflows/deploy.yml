@@ -79,17 +79,23 @@ jobs:
           name: setup
           path: setup/
           retention-days: 1
-      # Ship the manifest pair so the deploy step can install runtime deps on
+      # Ship the manifest trio so the deploy step can install runtime deps on
       # the target via `pnpm install --frozen-lockfile --prod`. Compiling
       # native modules against the build runner's glibc and shipping
       # node_modules works for prebuilt packages but breaks for anything
       # that needs to compile, so we trade slower deploy for reliability.
+      # `pnpm-workspace.yaml` carries the `onlyBuiltDependencies` allowlist
+      # — pnpm v10 default-denies dependency build scripts, so without this
+      # file `pnpm rebuild better-sqlite3` is silently a no-op and the
+      # service crashes on boot with "Could not locate the bindings file"
+      # (issue #87).
       - uses: actions/upload-artifact@v4
         with:
           name: manifest
           path: |
             package.json
             pnpm-lock.yaml
+            pnpm-workspace.yaml
           retention-days: 1
 
   deploy:
@@ -162,7 +168,7 @@ jobs:
             setup/ "deploy@${TARGET}:/opt/nanoclaw/setup/"
           rsync -az \
             -e 'ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes' \
-            package.json pnpm-lock.yaml \
+            package.json pnpm-lock.yaml pnpm-workspace.yaml \
             "deploy@${TARGET}:/opt/nanoclaw/"
 
       - name: Install runtime deps on target
