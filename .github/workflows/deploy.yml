@@ -15,8 +15,17 @@ on:
 
 # Pattern A (per Mouriya-Emma/local-cicd-demo §Deployment patterns):
 # build on a github-hosted runner, deploy on the netbird-mesh runner.
-# The deploy step rsyncs dist/ + container/ to deploy@nanoclaw.mouriya.lan
-# then `sudo systemctl restart nanoclaw` and a smoke check.
+# The deploy step rsyncs dist/ + container/ to
+# deploy@nanoclaw-108-124.mouriya.lan then `sudo systemctl restart nanoclaw`
+# and a smoke check.
+#
+# TARGET host note: VM 106's intended short alias `nanoclaw.mouriya.lan`
+# in netbird mesh DNS still points at orphan peer `100.85.157.186` (old
+# CT 105, destroyed). Until the orphan is removed in netbird management
+# and the alias rebound, this workflow uses VM 106's auto-assigned FQDN
+# with IP suffix (`nanoclaw-108-124.mouriya.lan` -> 100.85.108.124).
+# Cleanup tracked in homelab-tf; once the alias resolves to the live IP,
+# revert to the bare `nanoclaw.mouriya.lan` form.
 #
 # Secrets needed (configured in this repo's settings):
 #   DEPLOY_SSH_KEY   - private ed25519 key whose public counterpart is
@@ -111,7 +120,7 @@ jobs:
       - name: Stage SSH key
         env:
           DEPLOY_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          TARGET: nanoclaw.mouriya.lan
+          TARGET: nanoclaw-108-124.mouriya.lan
         run: |
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
@@ -123,7 +132,7 @@ jobs:
 
       - name: Rsync dist + container + scripts + manifest to /opt/nanoclaw
         env:
-          TARGET: nanoclaw.mouriya.lan
+          TARGET: nanoclaw-108-124.mouriya.lan
         run: |
           rsync -az --delete \
             -e 'ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes' \
@@ -141,7 +150,7 @@ jobs:
 
       - name: Install runtime deps on target
         env:
-          TARGET: nanoclaw.mouriya.lan
+          TARGET: nanoclaw-108-124.mouriya.lan
         run: |
           # `--ignore-scripts` skips the `prepare: husky` hook (dev tool
           # not installed in --prod), but it ALSO skips better-sqlite3's
@@ -154,7 +163,7 @@ jobs:
 
       - name: Build agent container image on target (uses Docker layer cache)
         env:
-          TARGET: nanoclaw.mouriya.lan
+          TARGET: nanoclaw-108-124.mouriya.lan
         run: |
           # Build on the target — Dockerfile + agent-runner sources need
           # to land before nanoclaw orchestrator's container-runner.ts
@@ -165,7 +174,7 @@ jobs:
 
       - name: Restart + smoke
         env:
-          TARGET: nanoclaw.mouriya.lan
+          TARGET: nanoclaw-108-124.mouriya.lan
         run: |
           # Boot can take longer than 3 s on first run because better-sqlite3
           # opens the on-disk db and the mattermost/telegram channels run
