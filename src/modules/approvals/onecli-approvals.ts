@@ -22,6 +22,7 @@ import { OneCLI, type ApprovalRequest, type ManualApprovalHandle } from '@onecli
 import { pickApprovalDelivery, pickApprover } from './primitive.js';
 import { ONECLI_API_KEY, ONECLI_URL } from '../../config.js';
 import { getAgentGroup } from '../../db/agent-groups.js';
+import { fromOneCLIIdentifier } from '../../fork-features/onecli-identifier.js';
 import {
   createPendingApproval,
   deletePendingApproval,
@@ -114,9 +115,11 @@ async function handleRequest(request: ApprovalRequest): Promise<Decision> {
   if (!adapterRef) return 'deny';
 
   // Originating agent group is carried on the request via OneCLI's agent
-  // identifier (set by container-runner.ts to agentGroup.id). Use it as
-  // the scope for approver selection: admin @ group → global admin → owner.
-  const originGroup = request.agent.externalId ? getAgentGroup(request.agent.externalId) : undefined;
+  // identifier (set by container-runner.ts via toOneCLIIdentifier). Strip
+  // the fork prefix before the lookup; non-prefixed values pass through
+  // unchanged so legacy OneCLI-side records still resolve.
+  const groupId = fromOneCLIIdentifier(request.agent.externalId);
+  const originGroup = groupId ? getAgentGroup(groupId) : undefined;
   const agentGroupId = originGroup?.id ?? null;
   const approvers = pickApprover(agentGroupId);
   if (approvers.length === 0) {
