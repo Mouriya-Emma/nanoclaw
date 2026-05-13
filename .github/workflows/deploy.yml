@@ -70,6 +70,15 @@ jobs:
           name: scripts
           path: scripts/
           retention-days: 1
+      # Ship setup/ too — container/build.sh sources setup/lib/install-slug.sh
+      # to derive the per-install image name (`container_image_base`), so the
+      # deploy step's `bash ./build.sh` invocation needs setup/lib/ present
+      # under /opt/nanoclaw on the target.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: setup
+          path: setup/
+          retention-days: 1
       # Ship the manifest pair so the deploy step can install runtime deps on
       # the target via `pnpm install --frozen-lockfile --prod`. Compiling
       # native modules against the build runner's glibc and shipping
@@ -102,6 +111,11 @@ jobs:
         with:
           name: scripts
           path: scripts/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: setup
+          path: setup/
 
       - uses: actions/download-artifact@v4
         with:
@@ -143,6 +157,9 @@ jobs:
           rsync -az --delete \
             -e 'ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes' \
             scripts/ "deploy@${TARGET}:/opt/nanoclaw/scripts/"
+          rsync -az --delete \
+            -e 'ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes' \
+            setup/ "deploy@${TARGET}:/opt/nanoclaw/setup/"
           rsync -az \
             -e 'ssh -i ~/.ssh/id_deploy -o IdentitiesOnly=yes' \
             package.json pnpm-lock.yaml \
