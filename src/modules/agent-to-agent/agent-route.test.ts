@@ -17,12 +17,12 @@ vi.mock('../../container-runner.js', () => ({
   killContainer: vi.fn(),
 }));
 
+const TEST_DIR = vi.hoisted(() => `${process.cwd()}/.vitest-tmp/nanoclaw-test-a2a-route`);
+
 vi.mock('../../config.js', async () => {
   const actual = await vi.importActual('../../config.js');
-  return { ...actual, DATA_DIR: '/tmp/nanoclaw-test-a2a-route' };
+  return { ...actual, DATA_DIR: TEST_DIR };
 });
-
-const TEST_DIR = '/tmp/nanoclaw-test-a2a-route';
 
 function now(): string {
   return new Date().toISOString();
