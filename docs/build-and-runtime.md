@@ -15,7 +15,7 @@ Host and container each have their own package tree:
   pnpm-workspace.yaml         minimumReleaseAge + onlyBuiltDependencies policy
 
 /container/agent-runner/      Bun 1.3+
-  bun.lock                    agent-runner runtime deps (Claude Agent SDK, MCP SDK, zod, etc.)
+  bun.lock                    agent-runner runtime deps (MCP SDK, zod, etc.)
   package.json                @types/bun, typescript devDeps for type-checking
 ```
 
@@ -33,7 +33,7 @@ Both are committed. CI and the Dockerfile run `--frozen-lockfile` variants — a
 ## Supply chain
 
 - **Host + global CLIs** (pnpm): `minimumReleaseAge: 4320` (3-day hold on new versions), `onlyBuiltDependencies` allowlist for postinstall scripts. See `pnpm-workspace.yaml` and `docs/SECURITY.md`.
-- **Agent-runner** (Bun): no release-age policy — Bun doesn't have an equivalent today. The defenses are `bun.lock` pinning plus version-pinned CLIs/Bun itself via Dockerfile ARGs. When bumping `@anthropic-ai/claude-agent-sdk` or any runtime dep, review the release date on npm and bump deliberately, not via `bun update`.
+- **Agent-runner** (Bun): no release-age policy — Bun doesn't have an equivalent today. The defenses are `bun.lock` pinning plus version-pinned CLIs/Bun itself via Dockerfile ARGs. When bumping the Claude Code CLI, MCP SDK, or any runtime dep, review the release date on npm and bump deliberately, not via `bun update`.
 
 ## Image build surface
 
@@ -72,6 +72,7 @@ Any failure fails the PR.
 - **Session DBs must use `journal_mode=DELETE`.** WAL's `-shm` memory-map doesn't cross VirtioFS between host and guest. See the doc comment at the top of `container/agent-runner/src/db/connection.ts` and `src/session-manager.ts`.
 - **Named SQL parameters in the container require the prefix in JS object keys.** `bun:sqlite` does not auto-strip `@`/`$`/`:` the way `better-sqlite3` does on the host. Use `$name` in both SQL and keys: `.run({ $id: msg.id })`. Positional `?` params work normally.
 - **Agent-runner tests run under `bun:test`, not vitest.** `vitest.config.ts` excludes the `container/agent-runner/` tree because vitest runs on Node and can't load `bun:sqlite`.
+- **Claude Code provider Channel Exchange is provider-local.** The `claude` provider starts its own mailbox/MCP bridge per query; NanoClaw still owns session SQLite persistence, container lifecycle, scheduled work, credential injection, and channel delivery. See [channel-exchange.md](channel-exchange.md).
 - **No tsc build step in the container image.** Re-adding one would reintroduce the ~200-500ms per-session-wake cost we removed.
 - **Global container CLIs stay on pnpm, not Bun.** `agent-browser`, `@anthropic-ai/claude-code`, `vercel` and any future Node CLIs the agent invokes should be pinned versions under the Dockerfile's pnpm global-install block. `bun install -g` would bypass the pnpm supply-chain policy.
 
