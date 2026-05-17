@@ -20,9 +20,9 @@
 import { Database } from 'bun:sqlite';
 import fs from 'fs';
 
-const DEFAULT_INBOUND_PATH = '/workspace/inbound.db';
-const DEFAULT_OUTBOUND_PATH = '/workspace/outbound.db';
-const DEFAULT_HEARTBEAT_PATH = '/workspace/.heartbeat';
+const DEFAULT_INBOUND_PATH = process.env.NANOCLAW_RUNNER_INBOUND_DB || '/workspace/inbound.db';
+const DEFAULT_OUTBOUND_PATH = process.env.NANOCLAW_RUNNER_OUTBOUND_DB || '/workspace/outbound.db';
+const DEFAULT_HEARTBEAT_PATH = process.env.NANOCLAW_RUNNER_HEARTBEAT || '/workspace/.heartbeat';
 
 let _inbound: Database | null = null;
 let _outbound: Database | null = null;
@@ -48,7 +48,11 @@ export function openInboundDb(): Database {
   // so the singleton survives for the rest of the test.
   if (_testMode && _inbound) {
     const db = _inbound;
-    return { prepare: (sql: string) => db.prepare(sql), exec: (sql: string) => db.exec(sql), close: () => {} } as unknown as Database;
+    return {
+      prepare: (sql: string) => db.prepare(sql),
+      exec: (sql: string) => db.exec(sql),
+      close: () => {},
+    } as unknown as Database;
   }
   const db = new Database(DEFAULT_INBOUND_PATH, { readonly: true });
   db.exec('PRAGMA busy_timeout = 5000');

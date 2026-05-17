@@ -56,3 +56,17 @@ When rebasing onto a new upstream version:
 - Patch:
   - Add provider-level tests for channel MCP config construction, exchange-envelope delivery, init/progress/activity mapping, `channel.send` result mapping, live follow-up delivery, abort, and stale-session classification.
 - Why a patch and not pure fork-features: these tests cover the replacement behavior of the built-in `claude` provider and need to live beside the provider test suite.
+
+## Channel exchange e2e harness (issue Mouriya-Emma/nanoclaw#96)
+
+### `container/agent-runner/src/db/connection.ts` — file-backed runner DB override
+
+- Patch:
+  - Let `NANOCLAW_RUNNER_INBOUND_DB`, `NANOCLAW_RUNNER_OUTBOUND_DB`, and `NANOCLAW_RUNNER_HEARTBEAT` override the container defaults `/workspace/inbound.db`, `/workspace/outbound.db`, and `/workspace/.heartbeat`.
+- Why a patch and not pure fork-features: the agent-runner DB paths are module-level constants inside the container-owned DB connection layer. The e2e harness needs to run the real poll-loop and Claude provider against real file-backed session DBs from a repo-local target-equivalent environment, but upstream has no constructor/config hook for runner DB paths outside the `/workspace` container mount.
+
+### `container/agent-runner/src/providers/claude.ts` — exchange endpoint diagnostic
+
+- Patch:
+  - Log the provider-local channel exchange URL plus runtime and Claude channel ids when a query starts.
+- Why a patch and not pure fork-features: the provider creates the exchange internally and currently exposes no observable endpoint metadata. The #96 true-path regression must preserve evidence that distinguishes exchange/MCP/provider/delivery breakpoints, so the diagnostic needs to live at the provider-owned creation point.

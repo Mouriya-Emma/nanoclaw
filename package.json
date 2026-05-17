@@ -25,7 +25,8 @@
     "lint": "eslint src/",
     "lint:fix": "eslint src/ --fix",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e:channel-exchange": "tsx scripts/e2e/channel-exchange.ts"
   },
   "dependencies": {
     "@clack/core": "^1.2.0",

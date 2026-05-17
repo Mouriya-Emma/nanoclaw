@@ -290,6 +290,9 @@ export class ClaudeProvider implements AgentProvider {
         child?.stdin.end();
       },
     });
+    log(
+      `Started channel exchange url=${exchange.url} runtimeChannelId=${exchange.runtimeChannelId} claudeChannelId=${exchange.claudeChannelId}`,
+    );
 
     child = this.spawnClaude(resolveClaudeExecutable(this.env), this.buildArgs(input, exchange), {
       cwd: input.cwd,
@@ -321,7 +324,6 @@ export class ClaudeProvider implements AgentProvider {
           return;
         }
         if (event.type === 'rate_limit_event' || (event.type === 'system' && event.subtype === 'rate_limit_event')) {
-          sawTerminalProviderEvent = true;
           queue.push({ type: 'error', message: 'Rate limit', retryable: false, classification: 'quota' });
           return;
         }
