@@ -27,6 +27,36 @@ export {
 } from './config.js';
 export { setExecuteSlashCommand } from './execute-command-action.js';
 export {
+  NANOCLAW_EXCHANGE_SCHEMA_VERSION,
+  NANOCLAW_INBOUND_BODY_KIND,
+  NANOCLAW_OUTBOUND_BODY_KIND,
+  bridgeReceiveErrorToDeliveryErrorEnvelope,
+  buildExchangeDeliveryErrorEnvelope,
+  createNanoClawExchangeRuntimeBridge,
+  decodeExchangeInboundEnvelope,
+  nanoclawRuntimeChannelId,
+  parseNanoclawRuntimeChannelId,
+  normalizePossiblyStringifiedJson,
+  projectNanoClawMessageToExchangeEnvelope,
+  receiveExchangeEnvelope,
+} from './exchange-runtime-bridge.js';
+export type {
+  BridgeReceiveErrorCode,
+  BridgeReceiveResult,
+  DecodedExchangeDeliveryFailure,
+  DecodedExchangeInbound,
+  ExchangeDeliverError,
+  ExchangeDeliverErrorEnvelope,
+  ExchangeDeliverMessage,
+  ExchangeDeliverMessageEnvelope,
+  ExchangeDeliveryErrorVariant,
+  ExchangeEnvelope,
+  NanoClawExchangeDestination,
+  NanoClawExchangeRuntimeBridge,
+  NanoClawExchangeRuntimeDeps,
+  NanoClawMessageProjection,
+} from './exchange-runtime-bridge.js';
+export {
   getModelPreference,
   setModelPreference,
   deleteModelPreference,

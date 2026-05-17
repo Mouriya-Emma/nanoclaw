@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { spawnSync } from 'child_process';
 
@@ -21,7 +20,9 @@ describe('scripts/q.ts', () => {
   let dbPath: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'q-test-'));
+    const tempRoot = path.join(process.cwd(), '.vitest-tmp');
+    fs.mkdirSync(tempRoot, { recursive: true });
+    tempDir = fs.mkdtempSync(path.join(tempRoot, 'q-test-'));
     dbPath = path.join(tempDir, 'test.db');
     const db = new Database(dbPath);
     db.exec(`
@@ -77,15 +78,15 @@ describe('scripts/q.ts', () => {
     expect(r.status).toBe(0);
 
     const db = new Database(dbPath, { readonly: true });
-    const ids = (db.prepare('SELECT id FROM t ORDER BY id').all() as { id: number }[]).map(
-      (r) => r.id,
-    );
+    const ids = (db.prepare('SELECT id FROM t ORDER BY id').all() as { id: number }[]).map((r) => r.id);
     db.close();
     expect(ids).toEqual([2, 9]);
   });
 
   it('WITH...DELETE is treated as a mutation, not a query', () => {
-    const r = run("WITH stale AS (SELECT id FROM t WHERE name = 'alice') DELETE FROM t WHERE id IN (SELECT id FROM stale)");
+    const r = run(
+      "WITH stale AS (SELECT id FROM t WHERE name = 'alice') DELETE FROM t WHERE id IN (SELECT id FROM stale)",
+    );
     expect(r.status).toBe(0);
     expect(r.stdout).toBe('');
 

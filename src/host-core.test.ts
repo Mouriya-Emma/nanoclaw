@@ -39,17 +39,17 @@ vi.mock('./container-runner.js', () => ({
   killContainer: vi.fn(),
 }));
 
+const TEST_DIR = vi.hoisted(() => `${process.cwd()}/.vitest-tmp/nanoclaw-test-host`);
+
 // Override DATA_DIR for tests
 vi.mock('./config.js', async () => {
   const actual = await vi.importActual('./config.js');
-  return { ...actual, DATA_DIR: '/tmp/nanoclaw-test-host' };
+  return { ...actual, DATA_DIR: TEST_DIR };
 });
 
 function now() {
   return new Date().toISOString();
 }
-
-const TEST_DIR = '/tmp/nanoclaw-test-host';
 
 beforeEach(() => {
   // Clean test directory
@@ -322,11 +322,11 @@ describe('session manager', () => {
   it('should refuse path-traversal in attachment filenames', () => {
     // Regression: attachment.name comes from untrusted senders (E2EE-protected
     // chat platforms can't sanitize it server-side). Without the guard, a
-    // `../../../tmp/pwned` filename escapes the inbox dir and writes anywhere
+    // `../../../pwned` filename escapes the inbox dir and writes anywhere
     // the host process can reach.
     const { session } = resolveSession('ag-1', 'mg-1', null, 'shared');
     const inboxBase = path.join(sessionDir('ag-1', session.id), 'inbox');
-    const escapeTarget = path.join('/tmp', 'nanoclaw-traversal-canary');
+    const escapeTarget = path.join(TEST_DIR, 'nanoclaw-traversal-canary');
     if (fs.existsSync(escapeTarget)) fs.rmSync(escapeTarget);
 
     writeSessionMessage('ag-1', session.id, {
@@ -338,7 +338,7 @@ describe('session manager', () => {
         attachments: [
           {
             type: 'document',
-            name: '../../../../../../../../tmp/nanoclaw-traversal-canary',
+            name: '../../../../../nanoclaw-traversal-canary',
             data: Buffer.from('owned').toString('base64'),
           },
         ],
