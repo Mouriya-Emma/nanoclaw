@@ -189,6 +189,32 @@ describe('ClaudeProvider', () => {
     expect(await iter.next()).toEqual({ done: true, value: undefined });
   });
 
+  it('keeps listening for channel.send after advisory rate-limit telemetry', async () => {
+    const { provider, children, exchanges } = makeProvider({ env: { CLAUDE_CODE_EXECUTABLE: 'claude-test' } });
+    const query = provider.query({ prompt: 'hello', cwd: '/workspace/agent' });
+    const iter = query.events[Symbol.asyncIterator]();
+    const child = children[0];
+
+    child.send({ type: 'rate_limit_event' });
+    expect(await nextEvent(iter)).toEqual({ type: 'activity' });
+    expect(await nextEvent(iter)).toEqual({
+      type: 'error',
+      message: 'Rate limit',
+      retryable: false,
+      classification: 'quota',
+    });
+
+    exchanges[0].emitRuntimeMessage('<message to="main">delivered after telemetry</message>');
+    expect(await nextEvent(iter)).toEqual({ type: 'activity' });
+    expect(await nextEvent(iter)).toEqual({
+      type: 'result',
+      text: '<message to="main">delivered after telemetry</message>',
+    });
+
+    child.close();
+    expect(await iter.next()).toEqual({ done: true, value: undefined });
+  });
+
   it('pushes live follow-ups through exchange and only nudges Claude to poll', () => {
     const { provider, children, exchanges } = makeProvider({ env: { CLAUDE_CODE_EXECUTABLE: 'claude-test' } });
     const query = provider.query({ prompt: 'initial', cwd: '/workspace/agent' });
