@@ -286,7 +286,7 @@ async function processQuery(
         const pending = getPendingMessages();
 
         // Slash commands need a fresh query: /clear resets the SDK's
-        // resume id (fixed at sdkQuery() time); admin/passthrough commands
+        // resume id (fixed at provider query start); admin/passthrough commands
         // (/compact, /cost, …) only dispatch when they're the first input
         // of a query — pushed mid-stream they arrive as plain text and
         // the SDK never runs them. End the stream and leave the rows

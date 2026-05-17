@@ -1,28 +1,30 @@
-import fs from 'fs';
-import path from 'path';
+import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from 'child_process';
+import { fileURLToPath } from 'url';
 
-import { query as sdkQuery, type HookCallback, type PreCompactHookInput } from '@anthropic-ai/claude-agent-sdk';
-
-import { clearContainerToolInFlight, setContainerToolInFlight } from '../db/connection.js';
+import {
+  AGENT_CHANNEL_SERVER_NAME,
+  NANOCLAW_INBOUND_BODY_KIND,
+  startClaudeChannelExchange,
+  type ClaudeChannelExchange,
+  type ClaudeChannelExchangeFactory,
+} from '../fork-features/claude-channel-exchange.js';
 import { registerProvider } from './provider-registry.js';
-import type { AgentProvider, AgentQuery, McpServerConfig, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
+import type {
+  AgentProvider,
+  AgentQuery,
+  McpServerConfig,
+  ProviderEvent,
+  ProviderOptions,
+  QueryInput,
+} from './types.js';
 
 function log(msg: string): void {
   console.error(`[claude-provider] ${msg}`);
 }
 
-// Deferred SDK builtins that either sidestep nanoclaw's own scheduling or
-// don't fit our async message-passing model (they're designed for Claude
-// Code's interactive UI and would hang here).
-//
-// - CronCreate / CronDelete / CronList / ScheduleWakeup: we have durable
-//   scheduling via mcp__nanoclaw__schedule_task.
-// - AskUserQuestion: SDK returns a placeholder instead of blocking on a
-//   real answer — we have mcp__nanoclaw__ask_user_question that persists
-//   the question and blocks on the real reply.
-// - EnterPlanMode / ExitPlanMode / EnterWorktree / ExitWorktree: Claude
-//   Code UI affordances; in a headless container they'd appear stuck.
-const SDK_DISALLOWED_TOOLS = [
+// Deferred Claude Code builtins that either sidestep nanoclaw's own scheduling
+// or don't fit the async message-passing model.
+const CLAUDE_DISALLOWED_TOOLS = [
   'CronCreate',
   'CronDelete',
   'CronList',
@@ -34,11 +36,6 @@ const SDK_DISALLOWED_TOOLS = [
   'ExitWorktree',
 ];
 
-// Tool allowlist for NanoClaw agent containers. MCP-tool entries are derived
-// at the call site from the registered `mcpServers` map so that any server
-// added via `add_mcp_server` (or wired in container.json directly) is
-// reachable to the agent — without this, the SDK's allowedTools filter
-// silently drops every MCP namespace not listed here.
 const TOOL_ALLOWLIST = [
   'Bash',
   'Read',
@@ -60,12 +57,15 @@ const TOOL_ALLOWLIST = [
   'NotebookEdit',
 ];
 
-// MCP server names are sanitized by the SDK when forming tool prefixes:
-// any character outside [A-Za-z0-9_-] becomes '_'. Mirror that here so our
-// allowlist patterns match what the SDK actually exposes.
-function mcpAllowPattern(serverName: string): string {
-  return `mcp__${serverName.replace(/[^a-zA-Z0-9_-]/g, '_')}__*`;
-}
+const CLAUDE_CODE_AUTO_COMPACT_WINDOW = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || '165000';
+const STALE_SESSION_RE = /no conversation found|ENOENT.*\.jsonl|session.*not found/i;
+const AGENT_CHANNEL_MCP_PATH = fileURLToPath(new URL('../fork-features/agent-channel-mcp.ts', import.meta.url));
+
+type SpawnClaude = (
+  command: string,
+  args: string[],
+  options: SpawnOptionsWithoutStdio,
+) => ChildProcessWithoutNullStreams;
 
 interface SDKUserMessage {
   type: 'user';
@@ -74,181 +74,162 @@ interface SDKUserMessage {
   session_id: string;
 }
 
-/**
- * Push-based async iterable for streaming user messages to the Claude SDK.
- */
-class MessageStream {
-  private queue: SDKUserMessage[] = [];
-  private waiting: (() => void) | null = null;
-  private done = false;
+type ClaudeStreamEvent = {
+  type?: string;
+  subtype?: string;
+  session_id?: string;
+  result?: string;
+  errors?: string[];
+  is_error?: boolean;
+  message?: {
+    content?: Array<{ type?: string; text?: string; name?: string; input?: unknown }>;
+  };
+  summary?: string;
+  compact_metadata?: { pre_tokens?: number };
+  tool_name?: string;
+  elapsed_time_seconds?: number;
+  rate_limit_info?: unknown;
+};
 
-  push(text: string): void {
-    this.queue.push({
-      type: 'user',
-      message: { role: 'user', content: text },
-      parent_tool_use_id: null,
-      session_id: '',
-    });
-    this.waiting?.();
+class AsyncEventQueue<T> implements AsyncIterable<T> {
+  private values: T[] = [];
+  private waiters: Array<() => void> = [];
+  private closed = false;
+  private error: unknown;
+
+  push(value: T): void {
+    if (this.closed) return;
+    this.values.push(value);
+    this.resolveOne();
   }
 
-  end(): void {
-    this.done = true;
-    this.waiting?.();
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.resolveAll();
   }
 
-  async *[Symbol.asyncIterator](): AsyncGenerator<SDKUserMessage> {
+  fail(error: unknown): void {
+    if (this.closed) return;
+    this.error = error;
+    this.closed = true;
+    this.resolveAll();
+  }
+
+  async *[Symbol.asyncIterator](): AsyncGenerator<T> {
     while (true) {
-      while (this.queue.length > 0) {
-        yield this.queue.shift()!;
+      while (this.values.length > 0) {
+        yield this.values.shift()!;
       }
-      if (this.done) return;
-      await new Promise<void>((r) => {
-        this.waiting = r;
+      if (this.error) throw this.error;
+      if (this.closed) return;
+      await new Promise<void>((resolve) => {
+        this.waiters.push(resolve);
       });
-      this.waiting = null;
     }
+  }
+
+  private resolveOne(): void {
+    this.waiters.shift()?.();
+  }
+
+  private resolveAll(): void {
+    const waiters = this.waiters.splice(0);
+    for (const waiter of waiters) waiter();
   }
 }
 
-// ── Transcript archiving (PreCompact hook) ──
-
-interface ParsedMessage {
-  role: 'user' | 'assistant';
-  content: string;
+function mcpAllowPattern(serverName: string): string {
+  return `mcp__${serverName.replace(/[^a-zA-Z0-9_-]/g, '_')}__*`;
 }
 
-function parseTranscript(content: string): ParsedMessage[] {
-  const messages: ParsedMessage[] = [];
-  for (const line of content.split('\n')) {
-    if (!line.trim()) continue;
-    try {
-      const entry = JSON.parse(line);
-      if (entry.type === 'user' && entry.message?.content) {
-        const text = typeof entry.message.content === 'string' ? entry.message.content : entry.message.content.map((c: { text?: string }) => c.text || '').join('');
-        if (text) messages.push({ role: 'user', content: text });
-      } else if (entry.type === 'assistant' && entry.message?.content) {
-        const textParts = entry.message.content.filter((c: { type: string }) => c.type === 'text').map((c: { text: string }) => c.text);
-        const text = textParts.join('');
-        if (text) messages.push({ role: 'assistant', content: text });
-      }
-    } catch {
-      /* skip unparseable lines */
-    }
-  }
-  return messages;
-}
-
-function formatTranscriptMarkdown(messages: ParsedMessage[], title?: string | null, assistantName?: string): string {
-  const now = new Date();
-  const dateStr = now.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
-  const lines = [`# ${title || 'Conversation'}`, '', `Archived: ${dateStr}`, '', '---', ''];
-  for (const msg of messages) {
-    const sender = msg.role === 'user' ? 'User' : assistantName || 'Assistant';
-    const content = msg.content.length > 2000 ? msg.content.slice(0, 2000) + '...' : msg.content;
-    lines.push(`**${sender}**: ${content}`, '');
-  }
-  return lines.join('\n');
-}
-
-/**
- * PreToolUse hook: record the current tool + its declared timeout so the host
- * sweep can widen its stuck tolerance while Bash is running a long-declared
- * script. Defense-in-depth: if SDK_DISALLOWED_TOOLS slips through somehow,
- * block the call here instead of letting the agent hang.
- */
-const preToolUseHook: HookCallback = async (input) => {
-  const i = input as { tool_name?: string; tool_input?: Record<string, unknown> };
-  const toolName = i.tool_name ?? '';
-  if (SDK_DISALLOWED_TOOLS.includes(toolName)) {
-    return {
-      decision: 'block',
-      stopReason: `Tool '${toolName}' is not available in this environment — use the nanoclaw equivalent.`,
-    } as unknown as ReturnType<HookCallback>;
-  }
-  // Bash exposes its timeout via the tool_input.timeout field (ms). Any other
-  // tool: no declared timeout.
-  const declaredTimeoutMs =
-    toolName === 'Bash' && typeof i.tool_input?.timeout === 'number' ? (i.tool_input.timeout as number) : null;
-  try {
-    setContainerToolInFlight(toolName, declaredTimeoutMs);
-  } catch (err) {
-    log(`PreToolUse: failed to record container_state: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  return { continue: true };
-};
-
-/** Clear in-flight tool on PostToolUse / PostToolUseFailure. */
-const postToolUseHook: HookCallback = async () => {
-  try {
-    clearContainerToolInFlight();
-  } catch (err) {
-    log(`PostToolUse: failed to clear container_state: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  return { continue: true };
-};
-
-function createPreCompactHook(assistantName?: string): HookCallback {
-  return async (input) => {
-    const preCompact = input as PreCompactHookInput;
-    const { transcript_path: transcriptPath, session_id: sessionId } = preCompact;
-
-    if (!transcriptPath || !fs.existsSync(transcriptPath)) {
-      log('No transcript found for archiving');
-      return {};
-    }
-
-    try {
-      const content = fs.readFileSync(transcriptPath, 'utf-8');
-      const messages = parseTranscript(content);
-      if (messages.length === 0) return {};
-
-      // Try to get summary from sessions index
-      let summary: string | undefined;
-      const indexPath = path.join(path.dirname(transcriptPath), 'sessions-index.json');
-      if (fs.existsSync(indexPath)) {
-        try {
-          const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
-          summary = index.entries?.find((e: { sessionId: string; summary?: string }) => e.sessionId === sessionId)?.summary;
-        } catch {
-          /* ignore */
-        }
-      }
-
-      const name = summary
-        ? summary.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 50)
-        : `conversation-${new Date().getHours().toString().padStart(2, '0')}${new Date().getMinutes().toString().padStart(2, '0')}`;
-
-      const conversationsDir = '/workspace/agent/conversations';
-      fs.mkdirSync(conversationsDir, { recursive: true });
-      const filename = `${new Date().toISOString().split('T')[0]}-${name}.md`;
-      fs.writeFileSync(path.join(conversationsDir, filename), formatTranscriptMarkdown(messages, summary, assistantName));
-      log(`Archived conversation to ${filename}`);
-    } catch (err) {
-      log(`Failed to archive transcript: ${err instanceof Error ? err.message : String(err)}`);
-    }
-    return {};
+function userMessage(content: string): SDKUserMessage {
+  return {
+    type: 'user',
+    message: { role: 'user', content },
+    parent_tool_use_id: null,
+    session_id: '',
   };
 }
 
-// ── Provider ──
+function writeJsonLine(child: ChildProcessWithoutNullStreams, message: SDKUserMessage): void {
+  child.stdin.write(JSON.stringify(message) + '\n');
+}
 
-/**
- * Claude Code auto-compacts context at this window (tokens). Kept here so
- * the generic bootstrap doesn't need to know about Claude-specific env vars.
- *
- * Operator override: set CLAUDE_CODE_AUTO_COMPACT_WINDOW in the host env to
- * raise or lower the threshold without editing source — useful when running
- * with a 1M-context model variant or when emergency-tuning a deployment.
- */
-const CLAUDE_CODE_AUTO_COMPACT_WINDOW = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || '165000';
+function splitLines(onLine: (line: string) => void): (chunk: Buffer | string) => void {
+  let buffer = '';
+  return (chunk) => {
+    buffer += chunk.toString();
+    let idx: number;
+    while ((idx = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, idx).trim();
+      buffer = buffer.slice(idx + 1);
+      if (line) onLine(line);
+    }
+  };
+}
 
-/**
- * Stale-session detection. Matches Claude Code's error text when a
- * resumed session can't be found — missing transcript .jsonl, unknown
- * session ID, etc.
- */
-const STALE_SESSION_RE = /no conversation found|ENOENT.*\.jsonl|session.*not found/i;
+function parseStreamEvent(line: string): ClaudeStreamEvent | null {
+  try {
+    return JSON.parse(line) as ClaudeStreamEvent;
+  } catch {
+    log(`Ignoring non-json Claude stream line: ${line.slice(0, 200)}`);
+    return null;
+  }
+}
+
+function errorMessage(event: ClaudeStreamEvent): string {
+  if (event.errors && event.errors.length > 0) return event.errors.join('\n');
+  if (event.subtype) return event.subtype;
+  return 'Claude Code query failed';
+}
+
+function progressMessage(event: ClaudeStreamEvent): string | null {
+  if (event.type === 'system' && event.subtype === 'task_notification') {
+    return event.summary || 'Task notification';
+  }
+  if (event.type === 'tool_progress') {
+    const tool = event.tool_name ?? 'tool';
+    const elapsed = typeof event.elapsed_time_seconds === 'number' ? ` (${event.elapsed_time_seconds}s)` : '';
+    return `${tool} running${elapsed}`;
+  }
+  if (event.type === 'assistant') {
+    const toolUse = event.message?.content?.find((block) => block.type === 'tool_use');
+    if (toolUse?.name) return `Using ${toolUse.name}`;
+  }
+  return null;
+}
+
+function compactedMessage(event: ClaudeStreamEvent): string | null {
+  if (event.type !== 'system' || event.subtype !== 'compact_boundary') return null;
+  const preTokens = event.compact_metadata?.pre_tokens;
+  const detail = preTokens ? ` (${preTokens.toLocaleString()} tokens compacted)` : '';
+  return `Context compacted${detail}.`;
+}
+
+function buildMcpConfig(
+  mcpServers: Record<string, McpServerConfig>,
+  exchange: ClaudeChannelExchange,
+): string | undefined {
+  const merged: Record<string, McpServerConfig> = {
+    ...mcpServers,
+    [AGENT_CHANNEL_SERVER_NAME]: {
+      command: 'bun',
+      args: ['run', AGENT_CHANNEL_MCP_PATH],
+      env: {
+        AGENT_CHANNEL_EXCHANGE_URL: exchange.url,
+        AGENT_CHANNEL_DESIRED_ID: exchange.claudeChannelId,
+        AGENT_CHANNEL_INSTANCE_LABEL: 'claude-code',
+      },
+    },
+  };
+  if (Object.keys(merged).length === 0) return undefined;
+  return JSON.stringify({ mcpServers: merged });
+}
+
+function resolveClaudeExecutable(env: Record<string, string | undefined>): string {
+  return env.CLAUDE_CODE_EXECUTABLE || process.env.CLAUDE_CODE_EXECUTABLE || '/pnpm/claude';
+}
 
 export class ClaudeProvider implements AgentProvider {
   readonly supportsNativeSlashCommands = true;
@@ -259,13 +240,21 @@ export class ClaudeProvider implements AgentProvider {
   private additionalDirectories?: string[];
   private model?: string;
   private effort?: string;
+  private spawnClaude: SpawnClaude;
+  private createExchange: ClaudeChannelExchangeFactory;
 
-  constructor(options: ProviderOptions = {}) {
+  constructor(
+    options: ProviderOptions = {},
+    spawnClaude: SpawnClaude = spawn,
+    createExchange: ClaudeChannelExchangeFactory = startClaudeChannelExchange,
+  ) {
     this.assistantName = options.assistantName;
     this.mcpServers = options.mcpServers ?? {};
     this.additionalDirectories = options.additionalDirectories;
     this.model = options.model;
     this.effort = options.effort;
+    this.spawnClaude = spawnClaude;
+    this.createExchange = createExchange;
     this.env = {
       ...(options.env ?? {}),
       CLAUDE_CODE_AUTO_COMPACT_WINDOW,
@@ -278,83 +267,193 @@ export class ClaudeProvider implements AgentProvider {
   }
 
   query(input: QueryInput): AgentQuery {
-    const stream = new MessageStream();
-    stream.push(input.prompt);
+    const queue = new AsyncEventQueue<ProviderEvent>();
 
-    const instructions = input.systemContext?.instructions;
+    let aborted = false;
+    let sawTerminalProviderEvent = false;
+    let stderr = '';
+    let child: ChildProcessWithoutNullStreams | undefined;
 
-    const sdkResult = sdkQuery({
-      prompt: stream,
-      options: {
-        cwd: input.cwd,
-        additionalDirectories: this.additionalDirectories,
-        resume: input.continuation,
-        pathToClaudeCodeExecutable: '/pnpm/claude',
-        systemPrompt: instructions ? { type: 'preset' as const, preset: 'claude_code' as const, append: instructions } : undefined,
-        allowedTools: [
-          ...TOOL_ALLOWLIST,
-          ...Object.keys(this.mcpServers).map(mcpAllowPattern),
-        ],
-        disallowedTools: SDK_DISALLOWED_TOOLS,
-        env: this.env,
-        model: this.model,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        effort: this.effort as any,
-        permissionMode: 'bypassPermissions',
-        allowDangerouslySkipPermissions: true,
-        settingSources: ['project', 'user'],
-        mcpServers: this.mcpServers,
-        hooks: {
-          PreToolUse: [{ hooks: [preToolUseHook] }],
-          PostToolUse: [{ hooks: [postToolUseHook] }],
-          PostToolUseFailure: [{ hooks: [postToolUseHook] }],
-          PreCompact: [{ hooks: [createPreCompactHook(this.assistantName)] }],
-        },
+    const exchange = this.createExchange({
+      onRuntimeMessage: ({ text }) => {
+        if (aborted || sawTerminalProviderEvent) return;
+        sawTerminalProviderEvent = true;
+        queue.push({ type: 'activity' });
+        queue.push({ type: 'result', text });
+        child?.stdin.end();
+      },
+      onRuntimeError: ({ message, retryable, classification }) => {
+        if (aborted || sawTerminalProviderEvent) return;
+        sawTerminalProviderEvent = true;
+        queue.push({ type: 'activity' });
+        queue.push({ type: 'error', message, retryable, classification });
+        child?.stdin.end();
       },
     });
 
-    let aborted = false;
+    child = this.spawnClaude(resolveClaudeExecutable(this.env), this.buildArgs(input, exchange), {
+      cwd: input.cwd,
+      env: this.envForSpawn(),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
 
-    async function* translateEvents(): AsyncGenerator<ProviderEvent> {
-      let messageCount = 0;
-      for await (const message of sdkResult) {
-        if (aborted) return;
-        messageCount++;
+    child.stdout.on(
+      'data',
+      splitLines((line) => {
+        const event = parseStreamEvent(line);
+        if (!event || aborted) return;
 
-        // Yield activity for every SDK event so the poll loop knows the agent is working
-        yield { type: 'activity' };
+        queue.push({ type: 'activity' });
 
-        if (message.type === 'system' && message.subtype === 'init') {
-          yield { type: 'init', continuation: message.session_id };
-        } else if (message.type === 'result') {
-          const text = 'result' in message ? (message as { result?: string }).result ?? null : null;
-          yield { type: 'result', text };
-        } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'api_retry') {
-          yield { type: 'error', message: 'API retry', retryable: true };
-        } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'rate_limit_event') {
-          yield { type: 'error', message: 'Rate limit', retryable: false, classification: 'quota' };
-        } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'compact_boundary') {
-          const meta = (message as { compact_metadata?: { pre_tokens?: number } }).compact_metadata;
-          const detail = meta?.pre_tokens ? ` (${meta.pre_tokens.toLocaleString()} tokens compacted)` : '';
-          yield { type: 'compacted', text: `Context compacted${detail}.` };
-        } else if (message.type === 'system' && (message as { subtype?: string }).subtype === 'task_notification') {
-          const tn = message as { summary?: string };
-          yield { type: 'progress', message: tn.summary || 'Task notification' };
+        if (event.type === 'system' && event.subtype === 'init' && event.session_id) {
+          queue.push({ type: 'init', continuation: event.session_id });
+          return;
         }
+
+        const progress = progressMessage(event);
+        if (progress) queue.push({ type: 'progress', message: progress });
+
+        const compacted = compactedMessage(event);
+        if (compacted) queue.push({ type: 'compacted', text: compacted });
+
+        if (event.type === 'system' && event.subtype === 'api_retry') {
+          queue.push({ type: 'error', message: 'API retry', retryable: true });
+          return;
+        }
+        if (event.type === 'rate_limit_event' || (event.type === 'system' && event.subtype === 'rate_limit_event')) {
+          sawTerminalProviderEvent = true;
+          queue.push({ type: 'error', message: 'Rate limit', retryable: false, classification: 'quota' });
+          return;
+        }
+
+        if (event.type === 'result') {
+          if (event.is_error || (event.subtype && event.subtype.startsWith('error'))) {
+            sawTerminalProviderEvent = true;
+            queue.push({ type: 'error', message: errorMessage(event), retryable: false });
+            return;
+          }
+          if (!sawTerminalProviderEvent && typeof event.result === 'string') {
+            log('Ignoring direct Claude Code result; waiting for channel.send provider result');
+          }
+        }
+      }),
+    );
+
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+      if (stderr.length > 8000) stderr = stderr.slice(-8000);
+    });
+
+    child.on('error', (err) => {
+      exchange.stop();
+      if (aborted) {
+        queue.close();
+        return;
       }
-      log(`Query completed after ${messageCount} SDK messages`);
-    }
+      queue.fail(err);
+    });
+
+    child.on('close', (code, signal) => {
+      exchange.stop();
+      if (aborted) {
+        queue.close();
+        return;
+      }
+      if (sawTerminalProviderEvent) {
+        queue.close();
+        return;
+      }
+      if (code === 0) {
+        queue.fail(new Error('Claude Code exited without replying through channel.send'));
+        return;
+      }
+      const tail = stderr.trim().split('\n').slice(-10).join('\n');
+      const detail = tail || (signal ? `terminated by ${signal}` : `exit ${code ?? 'unknown'}`);
+      queue.fail(new Error(detail));
+    });
+
+    const sendTurn = (message: string): void => {
+      const msgId = exchange.deliverToClaude(message);
+      writeJsonLine(child, userMessage(channelTurnInstruction(exchange.runtimeChannelId, msgId)));
+    };
+
+    sendTurn(input.prompt);
 
     return {
-      push: (msg) => stream.push(msg),
-      end: () => stream.end(),
-      events: translateEvents(),
+      push: (message) => {
+        if (aborted) return;
+        sendTurn(message);
+      },
+      end: () => {
+        child?.stdin.end();
+      },
+      events: queue,
       abort: () => {
         aborted = true;
-        stream.end();
+        exchange.stop();
+        child?.stdin.destroy();
+        child?.kill('SIGTERM');
+        queue.close();
       },
     };
   }
+
+  private buildArgs(input: QueryInput, exchange: ClaudeChannelExchange): string[] {
+    const args = [
+      '--print',
+      '--input-format',
+      'stream-json',
+      '--output-format',
+      'stream-json',
+      '--verbose',
+      '--permission-mode',
+      'bypassPermissions',
+      '--dangerously-skip-permissions',
+      '--allowedTools',
+      [
+        ...TOOL_ALLOWLIST,
+        ...Object.keys(this.mcpServers).map(mcpAllowPattern),
+        mcpAllowPattern(AGENT_CHANNEL_SERVER_NAME),
+      ].join(','),
+      '--disallowedTools',
+      CLAUDE_DISALLOWED_TOOLS.join(','),
+      '--setting-sources',
+      'project,user',
+    ];
+
+    if (input.continuation) args.push('--resume', input.continuation);
+    if (this.model) args.push('--model', this.model);
+    if (this.effort) args.push('--effort', this.effort);
+    if (this.assistantName) args.push('--name', this.assistantName);
+    if (input.systemContext?.instructions) args.push('--append-system-prompt', input.systemContext.instructions);
+    if (this.additionalDirectories && this.additionalDirectories.length > 0) {
+      args.push('--add-dir', ...this.additionalDirectories);
+    }
+    const mcpConfig = buildMcpConfig(this.mcpServers, exchange);
+    if (mcpConfig) args.push('--mcp-config', mcpConfig);
+
+    return args;
+  }
+
+  private envForSpawn(): NodeJS.ProcessEnv {
+    const env: NodeJS.ProcessEnv = {};
+    for (const [key, value] of Object.entries(this.env)) {
+      if (value !== undefined) env[key] = value;
+    }
+    return env;
+  }
+}
+
+function channelTurnInstruction(runtimeChannelId: string, msgId: string): string {
+  return [
+    'NanoClaw delivered a message through the Claude Code channel exchange.',
+    `Call the ${AGENT_CHANNEL_SERVER_NAME} MCP tool channel.poll_inbox now and read envelope ${msgId}.`,
+    'Do not answer from this prompt text; the actual NanoClaw turn input is only in the channel inbox.',
+    `When ready to finish the NanoClaw turn, call channel.send to "${runtimeChannelId}" with body_kind "${NANOCLAW_INBOUND_BODY_KIND}".`,
+    'Use payload {"message":{"content":"<complete provider result text>"}}.',
+    'The provider result text must include any <message to="..."> blocks exactly as NanoClaw should dispatch them.',
+    'After channel.send succeeds, finish with DONE.',
+  ].join('\n');
 }
 
 registerProvider('claude', (opts) => new ClaudeProvider(opts));
