@@ -5,10 +5,12 @@ import {
   NANOCLAW_INBOUND_BODY_KIND,
   NANOCLAW_OUTBOUND_BODY_KIND,
   bridgeReceiveErrorToDeliveryErrorEnvelope,
+  buildExchangeDeliveryErrorEnvelope,
   createNanoClawExchangeRuntimeBridge,
   decodeExchangeInboundEnvelope,
   nanoclawRuntimeChannelId,
   projectNanoClawMessageToExchangeEnvelope,
+  type ExchangeDeliverErrorEnvelope,
   type ExchangeDeliverMessageEnvelope,
 } from './exchange-runtime-bridge.js';
 import type { Session } from '../types.js';
@@ -43,6 +45,19 @@ function inboundEnvelope(payload: unknown): ExchangeDeliverMessageEnvelope {
       },
     },
   };
+}
+
+function deliveryErrorEnvelope(): ExchangeDeliverErrorEnvelope {
+  return buildExchangeDeliveryErrorEnvelope({
+    msgId: '01KRVBRIDGEERROR000000001',
+    from: 'exchange/system',
+    to: nanoclawRuntimeChannelId('ag-1', 'sess-1'),
+    failedMsgId: '01KRVBRIDGEOUTBOUND00001',
+    error: 'target_unknown',
+    humanMessage: 'target mailbox exchange/missing is not registered',
+    inReplyTo: '01KRVBRIDGEOUTBOUND00001',
+    timestamp: '2026-05-17T15:05:00.000Z',
+  });
 }
 
 describe('projectNanoClawMessageToExchangeEnvelope', () => {
@@ -132,7 +147,7 @@ describe('decodeExchangeInboundEnvelope', () => {
     );
 
     expect('ok' in decoded).toBe(false);
-    if ('ok' in decoded) return;
+    if ('ok' in decoded || 'deliveryFailure' in decoded) return;
 
     expect(decoded.agentGroupId).toBe('ag-1');
     expect(decoded.sessionId).toBe('sess-1');
@@ -156,7 +171,7 @@ describe('decodeExchangeInboundEnvelope', () => {
     );
 
     expect('ok' in decoded).toBe(false);
-    if ('ok' in decoded) return;
+    if ('ok' in decoded || 'deliveryFailure' in decoded) return;
 
     expect(decoded.message.kind).toBe('chat');
     expect(decoded.message.content).toBe(JSON.stringify({ text: 'plain text fallback' }));
@@ -175,6 +190,24 @@ describe('decodeExchangeInboundEnvelope', () => {
       ok: false,
       error: 'unsupported_body_kind',
       failedMsgId: '01KRVBRIDGEINBOUND0000001',
+    });
+  });
+
+  it('projects deliver.error into a typed runtime delivery failure', () => {
+    const decoded = decodeExchangeInboundEnvelope(deliveryErrorEnvelope());
+
+    expect('ok' in decoded).toBe(false);
+    if ('ok' in decoded || !('deliveryFailure' in decoded)) return;
+
+    expect(decoded.agentGroupId).toBe('ag-1');
+    expect(decoded.sessionId).toBe('sess-1');
+    expect(decoded.deliveryFailure).toEqual({
+      envelopeMsgId: '01KRVBRIDGEERROR000000001',
+      failedMsgId: '01KRVBRIDGEOUTBOUND00001',
+      error: 'target_unknown',
+      humanMessage: 'target mailbox exchange/missing is not registered',
+      reportedAt: '2026-05-17T15:05:00.000Z',
+      inReplyTo: '01KRVBRIDGEOUTBOUND00001',
     });
   });
 });
@@ -243,6 +276,44 @@ describe('createNanoClawExchangeRuntimeBridge', () => {
     expect(wakes).toHaveLength(1);
   });
 
+  it('rejects a deliver.message whose route target does not match the payload session', async () => {
+    const writes: unknown[] = [];
+    const wakes: Session[] = [];
+
+    const bridge = createNanoClawExchangeRuntimeBridge({
+      getSession() {
+        throw new Error('should reject before session lookup');
+      },
+      writeSessionMessage(...args) {
+        writes.push(args);
+      },
+      async wakeContainer(s) {
+        wakes.push(s);
+        return true;
+      },
+    });
+
+    const result = await bridge.receiveEnvelope(
+      inboundEnvelope({
+        session: { agent_group_id: 'ag-1', session_id: 'sess-other' },
+        message: {
+          id: 'exchange-msg-mismatch',
+          kind: 'chat',
+          content: { text: 'wrong target' },
+          trigger: 1,
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: 'target_mismatch',
+      failedMsgId: '01KRVBRIDGEINBOUND0000001',
+    });
+    expect(writes).toHaveLength(0);
+    expect(wakes).toHaveLength(0);
+  });
+
   it('rejects an envelope targeting a session owned by another agent group', async () => {
     const bridge = createNanoClawExchangeRuntimeBridge({
       getSession() {
@@ -267,6 +338,44 @@ describe('createNanoClawExchangeRuntimeBridge', () => {
       ok: false,
       error: 'session_agent_mismatch',
     });
+  });
+
+  it('surfaces exchange deliver.error as a typed runtime delivery failure without writing inbound rows', async () => {
+    const writes: unknown[] = [];
+    const wakes: Session[] = [];
+
+    const bridge = createNanoClawExchangeRuntimeBridge({
+      getSession(id) {
+        return id === 'sess-1' ? session() : undefined;
+      },
+      writeSessionMessage(...args) {
+        writes.push(args);
+      },
+      async wakeContainer(s) {
+        wakes.push(s);
+        return true;
+      },
+    });
+
+    const result = await bridge.receiveEnvelope(deliveryErrorEnvelope());
+
+    expect(result).toEqual({
+      ok: true,
+      event: 'delivery_failure',
+      agentGroupId: 'ag-1',
+      sessionId: 'sess-1',
+      messageId: '01KRVBRIDGEERROR000000001',
+      deliveryFailure: {
+        envelopeMsgId: '01KRVBRIDGEERROR000000001',
+        failedMsgId: '01KRVBRIDGEOUTBOUND00001',
+        error: 'target_unknown',
+        humanMessage: 'target mailbox exchange/missing is not registered',
+        reportedAt: '2026-05-17T15:05:00.000Z',
+        inReplyTo: '01KRVBRIDGEOUTBOUND00001',
+      },
+    });
+    expect(writes).toHaveLength(0);
+    expect(wakes).toHaveLength(0);
   });
 });
 

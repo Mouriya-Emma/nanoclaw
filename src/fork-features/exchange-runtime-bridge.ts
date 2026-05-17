@@ -102,20 +102,43 @@ export interface DecodedExchangeInbound {
   wake: boolean;
 }
 
+export interface DecodedExchangeDeliveryFailure {
+  agentGroupId: string;
+  sessionId: string;
+  deliveryFailure: {
+    envelopeMsgId: string;
+    failedMsgId: string;
+    error: ExchangeDeliveryErrorVariant;
+    humanMessage: string;
+    reportedAt: string;
+    inReplyTo?: string;
+  };
+}
+
 export type BridgeReceiveErrorCode =
   | 'unsupported_envelope'
   | 'unsupported_body_kind'
   | 'invalid_payload'
+  | 'target_mismatch'
   | 'session_not_found'
   | 'session_agent_mismatch';
 
 export type BridgeReceiveResult =
   | {
       ok: true;
+      event: 'message';
       agentGroupId: string;
       sessionId: string;
       messageId: string;
       woke: boolean;
+    }
+  | {
+      ok: true;
+      event: 'delivery_failure';
+      agentGroupId: string;
+      sessionId: string;
+      messageId: string;
+      deliveryFailure: DecodedExchangeDeliveryFailure['deliveryFailure'];
     }
   | {
       ok: false;
@@ -155,6 +178,22 @@ const MESSAGE_IN_KINDS = ['chat', 'chat-sdk', 'task', 'webhook', 'system'] as co
 
 export function nanoclawRuntimeChannelId(agentGroupId: string, sessionId: string): string {
   return `nanoclaw/${encodeURIComponent(agentGroupId)}/${encodeURIComponent(sessionId)}`;
+}
+
+export function parseNanoclawRuntimeChannelId(channelId: string): { agentGroupId: string; sessionId: string } | null {
+  const prefix = 'nanoclaw/';
+  if (!channelId.startsWith(prefix)) return null;
+
+  const parts = channelId.slice(prefix.length).split('/');
+  if (parts.length !== 2) return null;
+
+  try {
+    const [agentGroupId, sessionId] = parts.map((part) => decodeURIComponent(part));
+    if (!agentGroupId || !sessionId) return null;
+    return { agentGroupId, sessionId };
+  } catch {
+    return null;
+  }
 }
 
 export function normalizePossiblyStringifiedJson(value: unknown): unknown {
@@ -270,13 +309,9 @@ export function bridgeReceiveErrorToDeliveryErrorEnvelope(
 
 export function decodeExchangeInboundEnvelope(
   envelope: ExchangeEnvelope,
-): BridgeReceiveResult | DecodedExchangeInbound {
-  if (envelope.body.kind !== 'deliver.message') {
-    return receiveError(
-      'unsupported_envelope',
-      envelope.msg_id,
-      `unsupported envelope body kind: ${envelope.body.kind}`,
-    );
+): BridgeReceiveResult | DecodedExchangeInbound | DecodedExchangeDeliveryFailure {
+  if (isDeliverErrorEnvelope(envelope)) {
+    return decodeExchangeDeliveryErrorEnvelope(envelope);
   }
 
   const deliver = envelope.body.payload;
@@ -346,23 +381,75 @@ export function decodeExchangeInboundEnvelope(
   };
 }
 
+function decodeExchangeDeliveryErrorEnvelope(
+  envelope: ExchangeDeliverErrorEnvelope,
+): BridgeReceiveResult | DecodedExchangeDeliveryFailure {
+  const target = parseNanoclawRuntimeChannelId(envelope.to);
+  if (!target) {
+    return receiveError(
+      'target_mismatch',
+      envelope.msg_id,
+      `deliver.error target is not a NanoClaw runtime channel: ${envelope.to}`,
+    );
+  }
+
+  const payload = envelope.body.payload;
+  if (
+    !isExchangeDeliveryErrorVariant(payload.error) ||
+    typeof payload.failed_msg_id !== 'string' ||
+    payload.failed_msg_id.length === 0 ||
+    typeof payload.human_message !== 'string' ||
+    payload.human_message.length === 0
+  ) {
+    return receiveError('invalid_payload', envelope.msg_id, 'deliver.error payload is invalid');
+  }
+
+  return {
+    agentGroupId: target.agentGroupId,
+    sessionId: target.sessionId,
+    deliveryFailure: {
+      envelopeMsgId: envelope.msg_id,
+      failedMsgId: payload.failed_msg_id,
+      error: payload.error,
+      humanMessage: payload.human_message,
+      reportedAt: envelope.ts,
+      ...(envelope.in_reply_to !== undefined ? { inReplyTo: envelope.in_reply_to } : {}),
+    },
+  };
+}
+
 export function createNanoClawExchangeRuntimeBridge(deps: NanoClawExchangeRuntimeDeps): NanoClawExchangeRuntimeBridge {
   return {
     async receiveEnvelope(envelope) {
       const decoded = decodeExchangeInboundEnvelope(envelope);
       if ('ok' in decoded) return decoded;
 
-      const session = deps.getSession(decoded.sessionId);
-      if (!session) {
-        return receiveError('session_not_found', envelope.msg_id, `session not found: ${decoded.sessionId}`);
+      if ('deliveryFailure' in decoded) {
+        const sessionResult = validateReceiveTarget(deps, decoded.agentGroupId, decoded.sessionId, envelope.msg_id);
+        if ('ok' in sessionResult) return sessionResult;
+
+        return {
+          ok: true,
+          event: 'delivery_failure',
+          agentGroupId: decoded.agentGroupId,
+          sessionId: decoded.sessionId,
+          messageId: decoded.deliveryFailure.envelopeMsgId,
+          deliveryFailure: decoded.deliveryFailure,
+        };
       }
-      if (session.agent_group_id !== decoded.agentGroupId) {
+
+      const expectedTarget = nanoclawRuntimeChannelId(decoded.agentGroupId, decoded.sessionId);
+      if (envelope.to !== expectedTarget) {
         return receiveError(
-          'session_agent_mismatch',
+          'target_mismatch',
           envelope.msg_id,
-          `session ${decoded.sessionId} does not belong to agent group ${decoded.agentGroupId}`,
+          `envelope.to ${envelope.to} does not match decoded session target ${expectedTarget}`,
         );
       }
+
+      const sessionResult = validateReceiveTarget(deps, decoded.agentGroupId, decoded.sessionId, envelope.msg_id);
+      if ('ok' in sessionResult) return sessionResult;
+      const session = sessionResult.session;
 
       deps.writeSessionMessage(decoded.agentGroupId, decoded.sessionId, decoded.message);
 
@@ -373,6 +460,7 @@ export function createNanoClawExchangeRuntimeBridge(deps: NanoClawExchangeRuntim
 
       return {
         ok: true,
+        event: 'message',
         agentGroupId: decoded.agentGroupId,
         sessionId: decoded.sessionId,
         messageId: decoded.message.id,
@@ -380,6 +468,27 @@ export function createNanoClawExchangeRuntimeBridge(deps: NanoClawExchangeRuntim
       };
     },
   };
+}
+
+function validateReceiveTarget(
+  deps: NanoClawExchangeRuntimeDeps,
+  agentGroupId: string,
+  sessionId: string,
+  failedMsgId: string,
+): { session: Session } | Extract<BridgeReceiveResult, { ok: false }> {
+  const session = deps.getSession(sessionId);
+  if (!session) {
+    return receiveError('session_not_found', failedMsgId, `session not found: ${sessionId}`);
+  }
+  if (session.agent_group_id !== agentGroupId) {
+    return receiveError(
+      'session_agent_mismatch',
+      failedMsgId,
+      `session ${sessionId} does not belong to agent group ${agentGroupId}`,
+    );
+  }
+
+  return { session };
 }
 
 export async function receiveExchangeEnvelope(envelope: ExchangeEnvelope): Promise<BridgeReceiveResult> {
@@ -425,11 +534,31 @@ function bridgeErrorVariant(error: BridgeReceiveErrorCode): ExchangeDeliveryErro
     case 'session_not_found':
       return 'target_unknown';
     case 'session_agent_mismatch':
+    case 'target_mismatch':
       return 'unauthorized';
     case 'unsupported_envelope':
     case 'unsupported_body_kind':
     case 'invalid_payload':
       return 'envelope_invalid';
+  }
+}
+
+function isDeliverErrorEnvelope(envelope: ExchangeEnvelope): envelope is ExchangeDeliverErrorEnvelope {
+  return envelope.body.kind === 'deliver.error';
+}
+
+function isExchangeDeliveryErrorVariant(value: unknown): value is ExchangeDeliveryErrorVariant {
+  switch (value) {
+    case 'target_unknown':
+    case 'unauthorized':
+    case 'exchange_offline':
+    case 'envelope_invalid':
+    case 'mailbox_deregistered':
+    case 'schema_version_incompatible':
+    case 'rate_limited':
+      return true;
+    default:
+      return false;
   }
 }
 

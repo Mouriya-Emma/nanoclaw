@@ -35,6 +35,7 @@ export {
   createNanoClawExchangeRuntimeBridge,
   decodeExchangeInboundEnvelope,
   nanoclawRuntimeChannelId,
+  parseNanoclawRuntimeChannelId,
   normalizePossiblyStringifiedJson,
   projectNanoClawMessageToExchangeEnvelope,
   receiveExchangeEnvelope,
@@ -42,6 +43,7 @@ export {
 export type {
   BridgeReceiveErrorCode,
   BridgeReceiveResult,
+  DecodedExchangeDeliveryFailure,
   DecodedExchangeInbound,
   ExchangeDeliverError,
   ExchangeDeliverErrorEnvelope,
