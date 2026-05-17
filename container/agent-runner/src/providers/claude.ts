@@ -1,7 +1,22 @@
 import { spawn, type ChildProcessWithoutNullStreams, type SpawnOptionsWithoutStdio } from 'child_process';
+import { fileURLToPath } from 'url';
 
+import {
+  AGENT_CHANNEL_SERVER_NAME,
+  NANOCLAW_INBOUND_BODY_KIND,
+  startClaudeChannelExchange,
+  type ClaudeChannelExchange,
+  type ClaudeChannelExchangeFactory,
+} from '../fork-features/claude-channel-exchange.js';
 import { registerProvider } from './provider-registry.js';
-import type { AgentProvider, AgentQuery, McpServerConfig, ProviderEvent, ProviderOptions, QueryInput } from './types.js';
+import type {
+  AgentProvider,
+  AgentQuery,
+  McpServerConfig,
+  ProviderEvent,
+  ProviderOptions,
+  QueryInput,
+} from './types.js';
 
 function log(msg: string): void {
   console.error(`[claude-provider] ${msg}`);
@@ -44,6 +59,7 @@ const TOOL_ALLOWLIST = [
 
 const CLAUDE_CODE_AUTO_COMPACT_WINDOW = process.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW || '165000';
 const STALE_SESSION_RE = /no conversation found|ENOENT.*\.jsonl|session.*not found/i;
+const AGENT_CHANNEL_MCP_PATH = fileURLToPath(new URL('../fork-features/agent-channel-mcp.ts', import.meta.url));
 
 type SpawnClaude = (
   command: string,
@@ -162,11 +178,6 @@ function parseStreamEvent(line: string): ClaudeStreamEvent | null {
   }
 }
 
-function eventText(event: ClaudeStreamEvent): string | null {
-  if (typeof event.result === 'string') return event.result;
-  return null;
-}
-
 function errorMessage(event: ClaudeStreamEvent): string {
   if (event.errors && event.errors.length > 0) return event.errors.join('\n');
   if (event.subtype) return event.subtype;
@@ -196,9 +207,24 @@ function compactedMessage(event: ClaudeStreamEvent): string | null {
   return `Context compacted${detail}.`;
 }
 
-function buildMcpConfig(mcpServers: Record<string, McpServerConfig>): string | undefined {
-  if (Object.keys(mcpServers).length === 0) return undefined;
-  return JSON.stringify({ mcpServers });
+function buildMcpConfig(
+  mcpServers: Record<string, McpServerConfig>,
+  exchange: ClaudeChannelExchange,
+): string | undefined {
+  const merged: Record<string, McpServerConfig> = {
+    ...mcpServers,
+    [AGENT_CHANNEL_SERVER_NAME]: {
+      command: 'bun',
+      args: ['run', AGENT_CHANNEL_MCP_PATH],
+      env: {
+        AGENT_CHANNEL_EXCHANGE_URL: exchange.url,
+        AGENT_CHANNEL_DESIRED_ID: exchange.claudeChannelId,
+        AGENT_CHANNEL_INSTANCE_LABEL: 'claude-code',
+      },
+    },
+  };
+  if (Object.keys(merged).length === 0) return undefined;
+  return JSON.stringify({ mcpServers: merged });
 }
 
 function resolveClaudeExecutable(env: Record<string, string | undefined>): string {
@@ -215,14 +241,20 @@ export class ClaudeProvider implements AgentProvider {
   private model?: string;
   private effort?: string;
   private spawnClaude: SpawnClaude;
+  private createExchange: ClaudeChannelExchangeFactory;
 
-  constructor(options: ProviderOptions = {}, spawnClaude: SpawnClaude = spawn) {
+  constructor(
+    options: ProviderOptions = {},
+    spawnClaude: SpawnClaude = spawn,
+    createExchange: ClaudeChannelExchangeFactory = startClaudeChannelExchange,
+  ) {
     this.assistantName = options.assistantName;
     this.mcpServers = options.mcpServers ?? {};
     this.additionalDirectories = options.additionalDirectories;
     this.model = options.model;
     this.effort = options.effort;
     this.spawnClaude = spawnClaude;
+    this.createExchange = createExchange;
     this.env = {
       ...(options.env ?? {}),
       CLAUDE_CODE_AUTO_COMPACT_WINDOW,
@@ -236,15 +268,34 @@ export class ClaudeProvider implements AgentProvider {
 
   query(input: QueryInput): AgentQuery {
     const queue = new AsyncEventQueue<ProviderEvent>();
-    const child = this.spawnClaude(resolveClaudeExecutable(this.env), this.buildArgs(input), {
+
+    let aborted = false;
+    let sawTerminalProviderEvent = false;
+    let stderr = '';
+    let child: ChildProcessWithoutNullStreams | undefined;
+
+    const exchange = this.createExchange({
+      onRuntimeMessage: ({ text }) => {
+        if (aborted || sawTerminalProviderEvent) return;
+        sawTerminalProviderEvent = true;
+        queue.push({ type: 'activity' });
+        queue.push({ type: 'result', text });
+        child?.stdin.end();
+      },
+      onRuntimeError: ({ message, retryable, classification }) => {
+        if (aborted || sawTerminalProviderEvent) return;
+        sawTerminalProviderEvent = true;
+        queue.push({ type: 'activity' });
+        queue.push({ type: 'error', message, retryable, classification });
+        child?.stdin.end();
+      },
+    });
+
+    child = this.spawnClaude(resolveClaudeExecutable(this.env), this.buildArgs(input, exchange), {
       cwd: input.cwd,
       env: this.envForSpawn(),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-
-    let aborted = false;
-    let sawResult = false;
-    let stderr = '';
 
     child.stdout.on(
       'data',
@@ -270,17 +321,20 @@ export class ClaudeProvider implements AgentProvider {
           return;
         }
         if (event.type === 'rate_limit_event' || (event.type === 'system' && event.subtype === 'rate_limit_event')) {
+          sawTerminalProviderEvent = true;
           queue.push({ type: 'error', message: 'Rate limit', retryable: false, classification: 'quota' });
           return;
         }
 
         if (event.type === 'result') {
-          sawResult = true;
           if (event.is_error || (event.subtype && event.subtype.startsWith('error'))) {
+            sawTerminalProviderEvent = true;
             queue.push({ type: 'error', message: errorMessage(event), retryable: false });
             return;
           }
-          queue.push({ type: 'result', text: eventText(event) });
+          if (!sawTerminalProviderEvent && typeof event.result === 'string') {
+            log('Ignoring direct Claude Code result; waiting for channel.send provider result');
+          }
         }
       }),
     );
@@ -291,6 +345,7 @@ export class ClaudeProvider implements AgentProvider {
     });
 
     child.on('error', (err) => {
+      exchange.stop();
       if (aborted) {
         queue.close();
         return;
@@ -299,12 +354,17 @@ export class ClaudeProvider implements AgentProvider {
     });
 
     child.on('close', (code, signal) => {
+      exchange.stop();
       if (aborted) {
         queue.close();
         return;
       }
-      if (code === 0 || sawResult) {
+      if (sawTerminalProviderEvent) {
         queue.close();
+        return;
+      }
+      if (code === 0) {
+        queue.fail(new Error('Claude Code exited without replying through channel.send'));
         return;
       }
       const tail = stderr.trim().split('\n').slice(-10).join('\n');
@@ -312,27 +372,33 @@ export class ClaudeProvider implements AgentProvider {
       queue.fail(new Error(detail));
     });
 
-    writeJsonLine(child, userMessage(input.prompt));
+    const sendTurn = (message: string): void => {
+      const msgId = exchange.deliverToClaude(message);
+      writeJsonLine(child, userMessage(channelTurnInstruction(exchange.runtimeChannelId, msgId)));
+    };
+
+    sendTurn(input.prompt);
 
     return {
       push: (message) => {
         if (aborted) return;
-        writeJsonLine(child, userMessage(message));
+        sendTurn(message);
       },
       end: () => {
-        child.stdin.end();
+        child?.stdin.end();
       },
       events: queue,
       abort: () => {
         aborted = true;
-        child.stdin.destroy();
-        child.kill('SIGTERM');
+        exchange.stop();
+        child?.stdin.destroy();
+        child?.kill('SIGTERM');
         queue.close();
       },
     };
   }
 
-  private buildArgs(input: QueryInput): string[] {
+  private buildArgs(input: QueryInput, exchange: ClaudeChannelExchange): string[] {
     const args = [
       '--print',
       '--input-format',
@@ -347,6 +413,7 @@ export class ClaudeProvider implements AgentProvider {
       [
         ...TOOL_ALLOWLIST,
         ...Object.keys(this.mcpServers).map(mcpAllowPattern),
+        mcpAllowPattern(AGENT_CHANNEL_SERVER_NAME),
       ].join(','),
       '--disallowedTools',
       CLAUDE_DISALLOWED_TOOLS.join(','),
@@ -362,7 +429,7 @@ export class ClaudeProvider implements AgentProvider {
     if (this.additionalDirectories && this.additionalDirectories.length > 0) {
       args.push('--add-dir', ...this.additionalDirectories);
     }
-    const mcpConfig = buildMcpConfig(this.mcpServers);
+    const mcpConfig = buildMcpConfig(this.mcpServers, exchange);
     if (mcpConfig) args.push('--mcp-config', mcpConfig);
 
     return args;
@@ -375,6 +442,18 @@ export class ClaudeProvider implements AgentProvider {
     }
     return env;
   }
+}
+
+function channelTurnInstruction(runtimeChannelId: string, msgId: string): string {
+  return [
+    'NanoClaw delivered a message through the Claude Code channel exchange.',
+    `Call the ${AGENT_CHANNEL_SERVER_NAME} MCP tool channel.poll_inbox now and read envelope ${msgId}.`,
+    'Do not answer from this prompt text; the actual NanoClaw turn input is only in the channel inbox.',
+    `When ready to finish the NanoClaw turn, call channel.send to "${runtimeChannelId}" with body_kind "${NANOCLAW_INBOUND_BODY_KIND}".`,
+    'Use payload {"message":{"content":"<complete provider result text>"}}.',
+    'The provider result text must include any <message to="..."> blocks exactly as NanoClaw should dispatch them.',
+    'After channel.send succeeds, finish with DONE.',
+  ].join('\n');
 }
 
 registerProvider('claude', (opts) => new ClaudeProvider(opts));

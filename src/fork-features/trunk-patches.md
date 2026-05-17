@@ -28,13 +28,22 @@ When rebasing onto a new upstream version:
 
 ## Claude Code provider driver (issue Mouriya-Emma/nanoclaw#95)
 
-### `container/agent-runner/src/providers/claude.ts` — Claude Code CLI stream driver
+### `container/agent-runner/src/providers/claude.ts` — Claude Code channel provider driver
 
 - Patch:
-  - Replace the `@anthropic-ai/claude-agent-sdk` wrapper with a direct `claude --print --input-format stream-json --output-format stream-json` driver.
+  - Replace the `@anthropic-ai/claude-agent-sdk` wrapper with a Claude Code channel provider driver.
+  - Start a provider-local agent-channel exchange and inject the fork-owned `agent-channel` MCP child into Claude Code's MCP config.
+  - Deliver NanoClaw turn input and live follow-ups as `nanoclaw.message_out` exchange envelopes; treat `channel.send` with `nanoclaw.message_in` as the only successful provider result path.
   - Keep the existing `AgentProvider` surface (`query`, `push`, `end`, `events`, `abort`, `isSessionInvalid`) so `container/agent-runner/src/poll-loop.ts` stays provider-agnostic.
-  - Pass MCP server config, tool allow/deny lists, resume IDs, model/effort, additional directories, and system prompt append through Claude Code CLI flags.
+  - Pass existing MCP server config, tool allow/deny lists, resume IDs, model/effort, additional directories, and system prompt append through Claude Code CLI flags.
 - Why a patch and not pure fork-features: the upstream `claude` provider is the registered implementation for provider name `claude`. The provider registry has an extension point for adding providers, but not for replacing the built-in `claude` provider while preserving existing container configs and stored `sessions.agent_provider='claude'` values.
+
+### `container/agent-runner/src/fork-features/claude-channel-exchange.ts` / `agent-channel-mcp.ts` — provider-local channel adapter
+
+- Patch:
+  - Add fork-owned container-side channel/exchange adapter code used by the patched built-in `claude` provider.
+  - Mirror the #92/#94 bridge body kinds at the provider boundary (`nanoclaw.message_out` → Claude Code, `nanoclaw.message_in` → NanoClaw provider result) and normalize stringified JSON payloads from `channel.send`.
+- Why a patch and not pure upstream code: this is fork-owned implementation code, but it lives under `container/agent-runner/src/` because that is the only source tree mounted into the agent container as `/app/src`. The host-side `src/fork-features/` tree is not mounted into the container runtime.
 
 ### `container/agent-runner/package.json` / `container/agent-runner/bun.lock` — remove SDK runtime dependency
 
@@ -45,5 +54,5 @@ When rebasing onto a new upstream version:
 ### `container/agent-runner/src/providers/claude.test.ts` — lifecycle coverage
 
 - Patch:
-  - Add provider-level tests for CLI flag construction, init/result/progress/activity mapping, live follow-up streaming, abort, and stale-session classification.
+  - Add provider-level tests for channel MCP config construction, exchange-envelope delivery, init/progress/activity mapping, `channel.send` result mapping, live follow-up delivery, abort, and stale-session classification.
 - Why a patch and not pure fork-features: these tests cover the replacement behavior of the built-in `claude` provider and need to live beside the provider test suite.
