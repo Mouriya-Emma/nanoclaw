@@ -70,3 +70,13 @@ When rebasing onto a new upstream version:
 - Patch:
   - Log the provider-local channel exchange URL plus runtime and Claude channel ids when a query starts.
 - Why a patch and not pure fork-features: the provider creates the exchange internally and currently exposes no observable endpoint metadata. The #96 true-path regression must preserve evidence that distinguishes exchange/MCP/provider/delivery breakpoints, so the diagnostic needs to live at the provider-owned creation point.
+
+## vctcn self-hosted CI runner routing (issue mouriya-s-lab/nanoclaw#103)
+
+### `.github/workflows/ci.yml` — CI job runner stanza
+
+- Patch:
+  - Change the PR CI job from `runs-on: ubuntu-latest` to `[self-hosted, linux, vctcn]`.
+  - Run the job inside `catthehacker/ubuntu:full-24.04` so Node, pnpm, Bun, TypeScript, Vitest, and Bun tests execute in an ubuntu-latest-compatible userspace.
+  - Guard the job to same-repository pull requests, because this public fork must not execute untrusted fork PR code on the vctcn self-hosted runner.
+- Why a patch and not pure fork-features: GitHub Actions runner routing is defined only in the upstream-owned workflow file. There is no project extension point that can override a job's runner labels or container image from `src/fork-features/`.
