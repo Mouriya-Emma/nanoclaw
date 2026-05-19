@@ -1,6 +1,16 @@
 name: deploy
 
 on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'container/**'
+      - 'scripts/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'tsconfig.json'
+      - '.github/workflows/deploy.yml'
   push:
     branches: [main]
     paths:
@@ -13,8 +23,9 @@ on:
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
-# Pattern A (per Mouriya-Emma/local-cicd-demo §Deployment patterns):
-# build on a github-hosted runner, deploy on the netbird-mesh runner.
+# Pattern A (per local-cicd §Deployment patterns):
+# build on the vctcn runner in an ubuntu-latest-compatible job container,
+# deploy on the netbird-mesh runner.
 # The deploy step rsyncs dist/ + container/ to
 # deploy@nanoclaw-108-124.mouriya.lan then `sudo systemctl restart nanoclaw`
 # and a smoke check.
@@ -42,8 +53,10 @@ concurrency:
 
 jobs:
   build:
-    if: github.repository == 'Mouriya-Emma/nanoclaw'
-    runs-on: ubuntu-latest
+    if: github.repository == 'mouriya-s-lab/nanoclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: [self-hosted, linux, vctcn]
+    container:
+      image: catthehacker/ubuntu:full-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -98,8 +111,20 @@ jobs:
             pnpm-workspace.yaml
           retention-days: 1
 
+  deploy-tools:
+    needs: build
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, vctcn]
+    steps:
+      - name: Verify deploy tools
+        run: |
+          command -v ssh
+          command -v ssh-keyscan
+          command -v rsync
+
   deploy:
     needs: build
+    if: github.event_name != 'pull_request'
     runs-on: [self-hosted, linux, vctcn]
     timeout-minutes: 10
     steps:
@@ -136,6 +161,12 @@ jobs:
           find container/agent-runner container/pi-runner container/skills scripts/ \
             -type f \( -name '*.sh' -o -name '*.mjs' \) -print0 2>/dev/null \
             | xargs -0r chmod +x
+
+      - name: Verify deploy tools
+        run: |
+          command -v ssh
+          command -v ssh-keyscan
+          command -v rsync
 
       - name: Stage SSH key
         env:
