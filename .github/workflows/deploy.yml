@@ -111,6 +111,17 @@ jobs:
             pnpm-workspace.yaml
           retention-days: 1
 
+  deploy-tools:
+    needs: build
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: [self-hosted, linux, vctcn]
+    steps:
+      - name: Verify deploy tools
+        run: |
+          command -v ssh
+          command -v ssh-keyscan
+          command -v rsync
+
   deploy:
     needs: build
     if: github.event_name != 'pull_request'
