@@ -1,0 +1,68 @@
+name: Sync upstream
+
+# Pulls new commits from the upstream repo into a long-lived `sync/upstream`
+# branch and opens (or reuses) a PR against this fork's main. The PR is the
+# review gate where upstream changes meet the fork's downstream customizations.
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # daily 06:00 UTC
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM: https://github.com/nanocoai/nanoclaw.git
+  UPSTREAM_BRANCH: main
+  BASE_BRANCH: main
+  SYNC_BRANCH: sync/upstream
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream + base
+        run: |
+          git remote add upstream "$UPSTREAM"
+          git fetch upstream "$UPSTREAM_BRANCH"
+          git fetch origin "$BASE_BRANCH"
+
+      - name: Skip if already up to date
+        id: check
+        run: |
+          if git merge-base --is-ancestor upstream/"$UPSTREAM_BRANCH" origin/"$BASE_BRANCH"; then
+            echo "No new upstream commits."
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update sync branch
+        if: steps.check.outputs.has_changes == 'true'
+        run: |
+          git switch -C "$SYNC_BRANCH" upstream/"$UPSTREAM_BRANCH"
+          git push --force-with-lease origin "$SYNC_BRANCH"
+
+      - name: Open or reuse PR
+        if: steps.check.outputs.has_changes == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_PAT }}
+          REPO: ${{ github.repository }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          existing=$(gh api "repos/$REPO/pulls?head=$OWNER:$SYNC_BRANCH&base=$BASE_BRANCH&state=open" --jq 'length')
+          if [ "$existing" -gt 0 ]; then
+            echo "PR already open for $SYNC_BRANCH — branch updated, nothing to create."
+          else
+            gh api "repos/$REPO/pulls" -X POST \
+              -f title="Sync upstream → $(date +%F)" \
+              -f head="$SYNC_BRANCH" \
+              -f base="$BASE_BRANCH" \
+              -f body=$'Automated sync of `upstream/main` into this fork.\n\nReview for conflicts with downstream customizations before merging.'
+          fi
