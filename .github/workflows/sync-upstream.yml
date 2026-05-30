@@ -26,6 +26,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # PAT (not GITHUB_TOKEN) so the sync-branch push may carry upstream
+          # changes to .github/workflows/* — the default token lacks the
+          # `workflows` permission and the push is rejected otherwise.
+          token: ${{ secrets.SYNC_PAT }}
 
       - name: Fetch upstream + base
         run: |
