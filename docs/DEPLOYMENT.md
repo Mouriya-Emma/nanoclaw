@@ -32,9 +32,9 @@ After this play completes, the VM is parked waiting for the first GitHub Actions
 
 ## Code deploys (every push to `main`)
 
-`.github/workflows/deploy.yml` implements **Pattern A** (build on hosted runner, deploy on a netbird-mesh-attached self-hosted runner). The pattern is the same one used across the operator's other private services and is documented in `Mouriya-Emma/local-cicd-demo`.
+`.github/workflows/deploy.yml` implements **Pattern A** (build on the vctcn self-hosted runner, deploy on a netbird-mesh-attached self-hosted runner). The pattern is the same one used across the operator's other private services and is documented by the current `mouriya-s-lab/runner-canary` local-cicd template.
 
-The build job runs on `ubuntu-latest`, does `npm ci && npm run build`, and uploads four artifacts: `dist/`, `container/`, `scripts/`, and the `package.json` + `package-lock.json` pair. The deploy job runs on `[self-hosted, linux, vctcn]` (the netbird-attached runner sitting in OVH; it can reach `nanoclaw.mouriya.lan` over the mesh, GitHub-hosted runners cannot).
+The build job runs on `[self-hosted, linux, vctcn]` in the `catthehacker/ubuntu:full-24.04` job container, does the project-native install/build, and uploads `dist/`, `container/`, `scripts/`, `setup/`, and the pnpm manifest trio. The deploy job also runs on `[self-hosted, linux, vctcn]` (the netbird-attached runner sitting in OVH; it can reach `nanoclaw.mouriya.lan` over the mesh, GitHub-hosted runners cannot).
 
 The deploy job:
 

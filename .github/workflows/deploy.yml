@@ -23,7 +23,7 @@ on:
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
-# Pattern A (per local-cicd §Deployment patterns):
+# Pattern A (per runner-canary local-cicd §Deployment patterns):
 # build on the vctcn runner in an ubuntu-latest-compatible job container,
 # deploy on the netbird-mesh runner.
 # The deploy step rsyncs dist/ + container/ to
