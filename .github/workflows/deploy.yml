@@ -55,8 +55,6 @@ jobs:
   build:
     if: github.repository == 'mouriya-s-lab/nanoclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: [self-hosted, linux, vctcn]
-    container:
-      image: catthehacker/ubuntu:full-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
